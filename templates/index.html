@@ -1,0 +1,347 @@
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BOT Point v3.9.8 — Telegram и Google</title><style>
+:root{font-family:Inter,Segoe UI,Arial,sans-serif;color:#e7edf6;background:#0b1220}*{box-sizing:border-box}body{margin:0}.wrap{max-width:1080px;margin:38px auto;padding:0 20px}header{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:24px}h1{font-size:28px;margin:0}small,.muted{color:#a3b1c6}.tag{background:#1b3043;padding:9px 12px;border-radius:12px;font-size:13px}.panel{background:#121e30;border:1px solid #26364e;border-radius:16px;padding:24px;margin-bottom:18px}h2{margin:0 0 18px;font-size:18px}.row{display:flex;gap:14px;flex-wrap:wrap;align-items:end}.grow{flex:1}label{display:block;margin-bottom:8px;color:#b8c7d9;font-size:13px}textarea,input,select{width:100%;background:#0b1627;color:#fff;border:1px solid #34475f;border-radius:9px;padding:12px;font:inherit}textarea{min-height:240px;resize:vertical;line-height:1.65}input{min-width:160px}button{border:0;border-radius:9px;padding:12px 20px;background:#3b82f6;color:#fff;font-weight:650;cursor:pointer}button.secondary{background:#263b57}button:hover{filter:brightness(1.12)}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}.tablewrap{overflow:auto}table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:12px;border-bottom:1px solid #293950}th{color:#9fb4d1;font-size:13px}td.num{text-align:center}.ok{color:#5ee3ad}.miss{color:#ffae9e}.hidden{display:none}.stats{margin:12px 0;color:#aebcd0}@media(max-width:640px){.wrap{margin:18px auto}.panel{padding:16px}header{display:block}.tag{margin-top:12px}}
+.changed{color:#ffca73}.copybox{white-space:pre-wrap;max-height:190px;overflow:auto;background:#0b1627;border-radius:9px;padding:12px}.hint{font-size:13px;color:#a3b1c6}
+.sheet-result-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+.sheet-result-heading h2{margin:0}
+.sheet-result-heading button{white-space:nowrap}
+.sheet-filter{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin:16px 0 8px}
+.sheet-filter .grow{min-width:200px}
+.sheet-filter button{margin-bottom:0}
+.result-tablewrap{max-height:450px;overflow:auto;border:1px solid #293950;border-radius:10px}
+.result-tablewrap thead th{position:sticky;top:0;background:#182941;z-index:1}
+[hidden]{display:none!important}
+
+/* Modern Telegram history & manual operations */
+.feature-panel{border-color:#304461;background:linear-gradient(140deg,#162741 0%,#111e31 64%,#121e30 100%)}
+.feature-heading{display:flex;gap:15px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:18px}
+.feature-lead{display:flex;align-items:center;gap:14px}.feature-lead h2{margin:0 0 5px;font-size:20px}
+.feature-icon{width:51px;height:51px;border-radius:15px;background:#203a5a;display:grid;place-items:center;color:#80bdff;font-size:24px;flex-shrink:0}
+.status-chip{background:#243750;border:1px solid #365477;border-radius:999px;padding:7px 12px;color:#d3e3fb;font-size:12px;font-weight:700}
+.status-chip.good{background:#193e37;border-color:#2a6755;color:#8ce3bd}.status-chip.problem{background:#4a2a31;border-color:#824652;color:#ffb9ad}
+.metric-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:14px 0 18px}
+.metric{border:1px solid #2b4361;background:#182b44;border-radius:12px;padding:14px}.metric small{display:block;margin-bottom:8px;color:#a4bbd7;font-size:12px}.metric strong{font-size:22px;font-variant-numeric:tabular-nums}.metric .metric-sub{font-size:12px;color:#9bb0c9}
+.feature-action{display:flex;gap:13px;align-items:center;flex-wrap:wrap}.feature-action button{font-size:15px}.feature-footnote{margin:12px 0 0;font-size:13px;color:#a4b6d0}
+.tech-box{margin-top:17px;background:#0d1b2f;border:1px solid #2d4058;border-radius:11px;padding:12px 14px}.tech-box summary{cursor:pointer;color:#a8cfff;font-size:13px;font-weight:650}.tech-box p{margin:12px 0 4px}
+.manual-form{display:grid;grid-template-columns:minmax(200px,2fr) minmax(140px,1fr) auto;align-items:end;gap:12px}.manual-form button{min-height:46px}.manual-form input{min-width:0}
+.manual-preview{background:#192b42;border:1px solid #365273;border-radius:13px;padding:16px;margin-top:15px}.manual-preview strong{color:#e9f3ff}.manual-preview h3{font-size:16px;margin:0 0 9px}.manual-preview p{margin:6px 0}.manual-confirm{background:#2b80e7}.manual-history{margin-top:17px}.manual-history summary{cursor:pointer;color:#a7c7eb;font-size:13px;font-weight:650}.manual-history table{margin-top:12px}.inline-notice{padding:12px 14px;background:#11283d;border:1px solid #284b6a;border-radius:11px;color:#bcd7ed;font-size:13px}
+@media(max-width:700px){.metric-grid{grid-template-columns:1fr 1fr}.manual-form{grid-template-columns:1fr}.manual-form button{width:100%}}
+@media(max-width:390px){.metric-grid{grid-template-columns:1fr}}
+</style></head><body><main class="wrap"><header><div><h1>BOT Point</h1><small>Поинты из Telegram → Google Sheets</small></div><div class="tag" id="status">Проверка подключения…</div></header><section class="panel"><h2>1. Google Таблица — чтение и запись</h2>
+<label for="sheetUrl">Ссылка на таблицу или вкладку</label><input id="sheetUrl" placeholder="https://docs.google.com/spreadsheets/d/.../edit#gid=0">
+<p class="hint">Ссылка запоминается после успешной загрузки. При следующем открытии BOT Point таблица загрузится автоматически. Для изменения вставь другую ссылку и нажми кнопку ниже.</p>
+<div class="actions"><button id="loadSheet">Загрузить и сохранить</button></div><p id="defaultSheetInfo" class="hint" role="status" aria-live="polite"></p><p id="writeAccess" class="hint" role="status"></p><p id="writeStatus" class="stats" role="status" aria-live="polite"></p>
+<div id="sheetSetup" class="hidden"><p class="hint" id="sheetInfo"></p><div class="row">
+<div><label for="partCol">Столбец партномеров</label><select id="partCol"></select></div>
+<div><label for="pointsCol">Столбец текущих поинтов</label><select id="pointsCol"></select></div>
+<div><label for="idCol">Столбец ID сборки (на будущее)</label><select id="idCol"></select></div>
+<div><label for="firstRow">Первая строка данных (номер в Google)</label><input type="number" min="1" id="firstRow" value="2"></div>
+</div><p class="hint">ID сборки пока используется только для проверки заполнения отчётов и не участвует в поиске, усреднении или записи в Google. Выбор столбца ID сохраняется для будущих версий.</p>
+<p class="hint">Если Telegram больше Google более чем на 2 поинта — требуется одобрение в «Проверке сообщений», запись блокируется. Остальные отличия усредняются с округлением вверх. Партномера, которых нет в Google, автоматически добавляем в конец результата. Существующий порядок и внутренние пустые строки сохраняются.</p>
+<p class="hint">Период и режим расчёта применяются к сравнению и ручной проверке.</p>
+<div class="row"><div><label for="start">Начало периода (UTC)</label><input id="start" type="date"></div><div><label for="end">Конец периода (UTC)</label><input id="end" type="date"></div><div class="grow"><label for="mode">Метод расчёта</label><select id="mode"><option value="average">Среднее, округлить вверх</option><option value="latest">Последнее сообщение</option></select></div></div>
+<div class="actions"><button id="compareSheet">Сравнить с Telegram</button><button id="toggleAuto" class="secondary">Включить автообновление</button></div>
+<p id="autoInfo" class="hint" role="status">Автообновление выключено. После включения новые проверенные отчёты будут записываться в Google без подтверждения.</p>
+
+<p class="hint">Проверь столбцы и первую строку перед включением автоматической записи. Отчёты с расхождениями попадут на ручную проверку.</p>
+<p class="hint">Перед записью приложение проверяет текущие значения непосредственно в Google. Повторные нажатия не пересчитывают те же сообщения второй раз.</p></div>
+</section>
+<section class="panel" id="manualPoints"><div class="feature-heading"><div class="feature-lead"><div class="feature-icon" aria-hidden="true">✎</div><div><h2>Ручное управление поинтами</h2><p class="hint" style="margin:0">Добавление и изменение значений в Google Таблице</p></div></div><span class="status-chip">Ручной режим</span></div>
+<div class="manual-form"><div><label for="manualPart">Партномер</label><input id="manualPart" placeholder="Например, R5G23506" autocomplete="off" maxlength="250"></div><div><label for="manualPointsValue">Поинты</label><input id="manualPointsValue" type="number" min="0" max="1000" step="1" placeholder="8"></div><button type="button" id="manualPrepare">Добавить</button></div>
+<p class="feature-footnote">Если партномера нет — добавим строку. Если он есть — предложим подтвердить замену. Значение записывается точно, без усреднения. ID сборки пока не используется.</p>
+<div id="manualNotice" class="inline-notice" role="status" aria-live="polite" style="margin-top:14px">Сначала загрузи Google Таблицу и выбери столбцы партномеров и поинтов.</div>
+<div id="manualPreview" class="manual-preview hidden"><h3 id="manualPreviewTitle">Предварительная проверка</h3><p id="manualPreviewInfo"></p><div id="manualRowSelectWrap" class="hidden"><label for="manualRowSelect">Найдено несколько строк. Выбери одну для изменения:</label><select id="manualRowSelect"></select></div><div class="actions"><button type="button" id="manualConfirm" class="manual-confirm hidden">Подтвердить запись</button><button type="button" id="manualRecheck" class="secondary hidden">Проверить выбранную строку</button><button type="button" id="manualCancel" class="secondary">Отмена</button></div></div>
+<details class="manual-history"><summary>Журнал ручных изменений</summary><div class="tablewrap"><table><thead><tr><th>Дата (UTC)</th><th>Партномер</th><th>Строка</th><th>Изменение</th><th>Статус</th></tr></thead><tbody id="manualHistoryRows"><tr><td colspan="5" class="muted">Загрузка…</td></tr></tbody></table></div><div class="actions"><button type="button" class="secondary" id="manualReloadHistory">Обновить журнал</button></div></details></section>
+<section class="panel hidden" id="sheetResult">
+<div class="sheet-result-heading"><h2>Результат — обновлённый список для Google Таблицы</h2><button type="button" id="toggleSheetResult" class="secondary" aria-expanded="true" aria-controls="sheetResultDetails">Свернуть результат ▲</button></div>
+<div id="sheetResultDetails">
+<p id="sheetStats" class="stats"></p><div class="actions"><button id="applySheet" disabled>Добавить в таблицу</button></div><p id="applyHint" class="hint">Сначала нажми «Сравнить с Telegram».</p>
+<div class="sheet-filter"><div class="grow"><label for="sheetSearch">Поиск по партномеру в результатах</label><input id="sheetSearch" type="search" placeholder="Например, R5G23506" autocomplete="off" aria-controls="sheetRows"></div><button type="button" class="secondary" id="clearSheetSearch">Очистить поиск</button></div>
+<p id="sheetFilterCount" class="hint" role="status" aria-live="polite"></p>
+<div class="tablewrap result-tablewrap"><table><thead><tr><th>Строка</th><th>Партномер</th><th>Google</th><th>Telegram</th><th>Результат</th><th>Статус</th></tr></thead><tbody id="sheetRows"></tbody></table></div>
+<p class="hint">Поиск фильтрует только видимую таблицу. Добавление в Google и расчёт поинтов всегда используют полный список.</p>
+</div></section>
+<section class="panel"><h2>2. Telegram — контроль ID сборки</h2>
+<p class="hint">Отдельная настройка уведомлений: включается вручную, сохраняется после обновлений и распространяется только на новые отчёты. Учёт по ID сборки в Google Таблице пока не используется.</p>
+<div class="actions"><button type="button" id="toggleMissingId" class="secondary">Включить предупреждения об отсутствии ID</button></div>
+<p id="missingIdInfo" class="hint" role="status" aria-live="polite">Предупреждения в Telegram выключены. При включении BOT Point будет отвечать в той же теме на новые отчёты без ID сборки.</p></section>
+<section class="panel feature-panel" id="historyTelegram"><div class="feature-heading"><div class="feature-lead"><div class="feature-icon" aria-hidden="true">➤</div><div><h2>История Telegram</h2><p class="hint" style="margin:0">Синхронизация сообщений выбранной темы</p></div></div><span class="status-chip" id="historyBadge">Проверка статуса…</span></div>
+<div class="metric-grid"><div class="metric"><small>Период поиска</small><strong>30 дней</strong><div class="metric-sub">Последние отчёты</div></div><div class="metric"><small>Принятые отчёты</small><strong id="historyValid">—</strong><div class="metric-sub">В локальной базе за 30 дней</div></div><div class="metric"><small>Требуют проверки</small><strong id="historyReview">—</strong><div class="metric-sub">Отчёты с замечаниями</div></div></div>
+<div class="feature-action"><button type="button" id="syncHistory">↻ Проверить историю сообщений</button><span class="hint" id="historyLast">Последняя проверка: нет данных</span></div>
+<p id="syncStatus" class="feature-footnote" role="status" aria-live="polite">История считывается через настроенную Telegram-сессию.</p>
+<details class="tech-box"><summary>Технические сведения</summary><p class="hint" id="historyTechnical">Проверяем параметры подключения…</p><p class="hint">История из Telegram загружается в локальную базу. Запись поинтов в Google Таблицу управляется отдельно. ID сборки пока не участвует в расчёте.</p><p class="hint">Если Telegram не авторизован, подключи аккаунт через Bot Manager или <code>login_telegram.bat</code>.</p></details></section><section class="panel"><h2>Проверка сообщений</h2><p class="hint">Сюда также попадают случаи увеличения поинтов более чем на 2 относительно Google. До одобрения такие значения не записываются. По каждому сообщению складываются числа в конце строк (кроме строки партномера и итоговой строки). При расхождении сообщение не влияет на автоматическую запись. Проверь рассчитанные поинты, при необходимости исправь число и нажми «Одобрить» — отчёт будет сразу отправлен в Google.</p><div class="actions"><button id="loadReview" class="secondary">Обновить список</button></div><p id="reviewCount" class="stats"></p><div class="tablewrap"><table><thead><tr><th>Партномер</th><th>Сумма / Google</th><th>Новые поинты</th><th>Причина</th><th>Исходное сообщение</th><th>Одобрить</th></tr></thead><tbody id="reviewRows"></tbody></table></div></section>
+<p class="muted">Данные собираются ботом из выбранной темы и дополняются синхронизацией через Telethon. Для постоянного сбора новых сообщений приложение должно работать.</p></main><script>
+const $=id=>document.getElementById(id);
+async function updateTelegramHistory(){
+  try{
+    const r=await fetch('/api/history-status');const d=await r.json();if(!r.ok)throw Error(d.error||'Ошибка');
+    $('historyValid').textContent=d.valid;$('historyReview').textContent=d.review;
+    const chip=$('historyBadge');chip.className='status-chip '+(d.last_error?'problem':d.last_success?'good':'');
+    chip.textContent=d.last_error?'Ошибка проверки':d.last_success?'История обновлена':'Ожидает проверки';
+    $('historyLast').textContent='Последняя проверка: '+(d.last_success?new Date(d.last_success).toLocaleString('ru-RU'):'нет данных');
+    $('historyTechnical').textContent='Источник: '+(d.source==='shared'?'общий Telegram через лаунчер':'локальная сессия Telethon')+' · Тема: '+(d.thread_configured?'настроена':'укажи CHAT_ID и THREAD_ID');
+    if(d.last_error)$('syncStatus').textContent='Последняя ошибка: '+d.last_error;
+  }catch(e){$('historyBadge').className='status-chip problem';$('historyBadge').textContent='Нет данных';$('syncStatus').textContent='Не удалось получить статус: '+e.message;}
+}
+$('syncHistory').onclick=async()=>{const b=$('syncHistory');b.disabled=true;b.textContent='⏳ Чтение истории…';$('syncStatus').textContent='Загружаем сообщения Telegram за последние 30 дней…';
+try{const r=await fetch('/api/sync-history',{method:'POST'});const d=await r.json();if(!r.ok)throw Error(d.error||'Ошибка');$('syncStatus').textContent='✓ Синхронизация завершена. '+(d.message||'');status();$('loadReview').click();}
+catch(e){$('syncStatus').textContent='Ошибка: '+e.message;}
+finally{b.disabled=false;b.textContent='↻ Проверить историю сообщений';await updateTelegramHistory();}};
+updateTelegramHistory();
+
+$('loadReview').onclick=async()=>{try{
+  const r=await fetch('/api/review-messages');const d=await r.json();if(!r.ok)throw Error(d.error||'Ошибка');
+  $('reviewCount').textContent='На проверке: '+d.total;
+  const body=$('reviewRows');body.replaceChildren();
+  for(const item of d.messages){
+    const tr=document.createElement('tr');
+    for(const value of [item.part,item.calculated??'—',item.last_value??'—',item.reason,item.text]){
+      const td=document.createElement('td');td.textContent=String(value);td.style.whiteSpace='pre-wrap';tr.appendChild(td);
+    }
+    const td=document.createElement('td');td.style.minWidth='160px';
+    const isIncrease=item.kind==='sheet_points';
+    const input=document.createElement('input');input.type='number';input.min='0';input.max='1000';input.step='any';
+    input.value=item.last_value??item.calculated??'';input.title=isIncrease?'Значение Telegram (подтверждается без изменения)':'Подтверждённые поинты';
+    if(isIncrease){input.readOnly=true;input.title='Для изменения поинтов исправь отчёт в Telegram и пересчитай';}
+    const btn=document.createElement('button');btn.textContent='Одобрить';btn.style.marginTop='7px';
+    btn.onclick=async()=>{
+      const points=Number(input.value);
+      if(!input.value.trim()||!Number.isFinite(points)||points<0||points>1000){alert('Введи корректные поинты от 0 до 1000');return;}
+      const prompt=isIncrease?('Одобрить увеличение '+item.part+' с '+item.old_value+' до '+points+' поинтов? После подтверждения в Google запишется усреднённое значение.'):
+        ('Одобрить отчёт '+item.part+' со значением '+points+'? Это может изменить Google Таблицу.');
+      if(!confirm(prompt))return;
+      btn.disabled=true;btn.textContent='Сохранение…';
+      try{
+        const data=isIncrease?{kind:'sheet_points',spreadsheet_id:item.spreadsheet_id,gid:item.gid,part:item.part,signature:item.signature}:
+          {chat_id:item.chat_id,message_id:item.message_id,text_hash:item.text_hash,points};
+        const response=await fetch('/api/approve-review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+        const result=await response.json();if(!response.ok)throw Error(result.error||'Ошибка');
+        $('writeStatus').textContent=result.message;
+        if(!result.written)alert(result.message);
+        $('loadReview').click();refreshAutoStatus();invalidatePlan();
+      }catch(e){alert('Не удалось одобрить: '+e.message);btn.disabled=false;btn.textContent='Одобрить';}
+    };
+    td.appendChild(input);td.appendChild(btn);tr.appendChild(td);body.appendChild(tr);
+  }
+}catch(e){$('reviewCount').textContent='Ошибка: '+e.message}};
+$('loadReview').click();
+const iso=d=>d.toISOString().slice(0,10);let today=new Date();$('end').value=iso(today);let d=new Date(today);d.setUTCDate(d.getUTCDate()-30);$('start').value=iso(d);
+async function status(){try{const s=await(await fetch('/api/status')).json();$('status').textContent=(s.configured?'Бот: '+(s.bot_name?'@'+s.bot_name:'настроен'):'BOT_TOKEN не задан')+' · сообщений: '+s.saved_messages+(s.last_error?' · Ошибка: '+s.last_error:'');}catch(e){$('status').textContent='Нет соединения'}}status();setInterval(status,15000);
+let sheetData=null, comparison=[], planToken=null, googleWriteReady=false, loadedSheetUrl=null;
+
+let manualToken=null,manualPreviewData=null;
+function hideManualPreview(){manualToken=null;manualPreviewData=null;$('manualPreview').classList.add('hidden');$('manualConfirm').classList.add('hidden');$('manualRecheck').classList.add('hidden');$('manualRowSelectWrap').classList.add('hidden');}
+function manualPayload(){
+  if(!sheetData||!loadedSheetUrl)throw Error('Сначала загрузи Google Таблицу');
+  if($('sheetUrl').value.trim()!==loadedSheetUrl)throw Error('Сначала сохрани выбранную Google Таблицу');
+  const value=$('manualPointsValue').value.trim();const point=Number(value);
+  if(!value||!Number.isInteger(point)||point<0||point>1000)throw Error('Укажи целое число поинтов от 0 до 1000');
+  const part=$('manualPart').value.trim();if(!part)throw Error('Укажи партномер');
+  return {part,points:point,part_col:Number($('partCol').value),points_col:Number($('pointsCol').value),first_row:Number($('firstRow').value)};
+}
+async function requestManualPreview(targetRow=null){
+  hideManualPreview();const btn=$('manualPrepare');btn.disabled=true;btn.textContent='Проверка…';
+  try{
+    const payload=manualPayload();if(targetRow!==null)payload.target_row=targetRow;
+    const response=await fetch('/api/manual-prepare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const d=await response.json();if(!response.ok)throw Error(d.error||'Ошибка проверки');
+    manualPreviewData=d;manualToken=d.plan_token||null;$('manualPreview').classList.remove('hidden');
+    const title=$('manualPreviewTitle'), info=$('manualPreviewInfo');
+    if(d.action==='choose'){
+      title.textContent='Несколько совпадений — выбери строку';info.textContent='Найдено '+d.candidates.length+' строк с партномером '+d.part+'. Автоматически выбирать строку небезопасно.';
+      const select=$('manualRowSelect');select.replaceChildren();for(const r of d.candidates){const o=document.createElement('option');o.value=r.row;o.textContent='Строка '+r.row+' · '+(r.old||'пусто')+' поинтов';select.appendChild(o);}
+      $('manualRowSelectWrap').classList.remove('hidden');$('manualRecheck').classList.remove('hidden');
+      $('manualNotice').textContent='Найдено несколько строк. Выбери точную строку для изменения.';
+    }else if(d.action==='unchanged'){
+      title.textContent='Изменений не требуется';info.textContent=d.part+' · строка '+d.row+' · уже указано '+d.points+' поинтов.';
+      $('manualNotice').textContent='✓ Значение уже совпадает с Google Таблицей. Запись не нужна.';
+    }else{
+      const adding=d.action==='add';title.textContent=adding?'Добавление новой строки':'Подтверждение перезаписи';
+      info.textContent=adding?'Партномер '+d.part+' отсутствует в таблице. Добавить строку '+d.row+' с '+d.points+' поинтами?':
+        'Партномер '+d.part+' · строка '+d.row+' · '+(d.old||'пусто')+' → '+d.points+' поинтов. Изменение без усреднения.';
+      $('manualConfirm').textContent=adding?'Подтвердить добавление':'Перезаписать поинты';$('manualConfirm').classList.remove('hidden');
+      $('manualNotice').textContent='Проверь данные перед записью. Google Таблица изменится только после подтверждения.';
+    }
+  }catch(e){$('manualNotice').textContent='Ошибка проверки: '+e.message;}
+  finally{btn.disabled=false;btn.textContent='Добавить';}
+}
+$('manualPrepare').onclick=()=>requestManualPreview();
+$('manualRecheck').onclick=()=>requestManualPreview(Number($('manualRowSelect').value));
+$('manualCancel').onclick=()=>{hideManualPreview();$('manualNotice').textContent='Операция отменена. Google Таблица не изменена.';};
+for(const id of ['manualPart','manualPointsValue','partCol','pointsCol','firstRow','sheetUrl']){
+  $(id).addEventListener('input',hideManualPreview);$(id).addEventListener('change',hideManualPreview);
+}
+$('manualConfirm').onclick=async()=>{
+  if(!manualToken||!manualPreviewData)return;
+  const d=manualPreviewData;
+  if(!confirm((d.action==='add'?'Добавить новый партномер':'Перезаписать поинты')+' в Google Таблице?\nПартномер: '+d.part+'\nСтрока: '+d.row+'\n'+(d.action==='replace'?'Было: '+(d.old||'пусто')+'\n':'')+'Будет: '+d.points+'\n\nДействие будет записано в журнал.'))return;
+  const btn=$('manualConfirm');btn.disabled=true;btn.textContent='Запись…';
+  try{
+    const r=await fetch('/api/manual-apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plan_token:manualToken})});
+    const result=await r.json();if(!r.ok)throw Error(result.error||'Ошибка записи');
+    hideManualPreview();$('manualNotice').textContent='✓ '+result.message+' · '+result.part+' · '+result.points+' поинтов · строка '+result.row+'.';
+    await loadManualHistory();await loadSheet();
+    $('manualNotice').textContent='✓ '+result.message+' · '+result.part+' · '+result.points+' поинтов · строка '+result.row+'.';
+  }catch(e){hideManualPreview();$('manualNotice').textContent='Ошибка записи: '+e.message;await loadManualHistory();}
+  finally{btn.disabled=false;btn.textContent='Подтвердить запись';}
+};
+async function loadManualHistory(){
+  try{
+    const r=await fetch('/api/manual-write-history');const d=await r.json();if(!r.ok)throw Error(d.error||'Ошибка');
+    const body=$('manualHistoryRows');body.replaceChildren();
+    if(!d.items.length){const tr=document.createElement('tr');const td=document.createElement('td');td.colSpan=5;td.textContent='Пока нет ручных изменений';tr.appendChild(td);body.appendChild(tr);return;}
+    for(const item of d.items){const tr=document.createElement('tr');const values=[new Date(item.created_utc*1000).toISOString().slice(0,16).replace('T',' '),item.part,item.row_number,
+      (item.action==='add'?'Добавлено':'Перезаписано')+': '+(item.old_value||'—')+' → '+item.new_value,
+      item.status==='applied'?'Успешно':item.status==='uncertain'?'Проверить Google':'Выполняется'];
+      for(const value of values){const td=document.createElement('td');td.textContent=String(value);tr.appendChild(td)}body.appendChild(tr);
+    }
+  }catch(e){$('manualHistoryRows').replaceChildren();const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=5;td.textContent='Не удалось загрузить журнал: '+e.message;tr.appendChild(td);$('manualHistoryRows').appendChild(tr);}
+}
+$('manualReloadHistory').onclick=loadManualHistory;
+loadManualHistory();
+
+function setSheetResultExpanded(expanded){
+  $('sheetResultDetails').hidden=!expanded;
+  $('toggleSheetResult').setAttribute('aria-expanded',String(expanded));
+  $('toggleSheetResult').textContent=expanded?'Свернуть результат ▲':'Развернуть результат ▼';
+}
+$('toggleSheetResult').onclick=()=>setSheetResultExpanded($('sheetResultDetails').hidden);
+function filterSheetRows(){
+  const query=$('sheetSearch').value.trim().toLocaleLowerCase();
+  let shown=0;
+  for(const tr of $('sheetRows').rows){
+    const match=tr.dataset.part.includes(query);
+    tr.hidden=!match;
+    if(match)shown++;
+  }
+  $('sheetFilterCount').textContent='Показано: '+shown+' из '+comparison.length+(query?' · фильтр: «'+$('sheetSearch').value.trim()+'»':'');
+}
+$('sheetSearch').addEventListener('input',filterSheetRows);
+$('clearSheetSearch').onclick=()=>{$('sheetSearch').value='';filterSheetRows();$('sheetSearch').focus()};
+async function refreshWriteAccess(){try{let r=await fetch('/api/sheet-write-status');let d=await r.json();googleWriteReady=!!d.configured; $('writeAccess').textContent=googleWriteReady?'✓ Запись включена. Сервисный аккаунт: '+d.service_email:'Запись отключена. Добавь JSON ключ сервисного аккаунта и выдай ему роль «Редактор» в Google Таблице (см. README). Предпросмотр работает без ключа.';}catch(e){googleWriteReady=false;$('writeAccess').textContent='Не удалось проверить доступ к записи';}}
+refreshWriteAccess();
+let autoConfig={enabled:false};
+let missingIdConfig={enabled:false};
+async function refreshMissingIdStatus(){
+  try{
+    const response=await fetch('/api/missing-id-notifications');const d=await response.json();
+    if(!response.ok)throw Error(d.error||'Ошибка');missingIdConfig=d;
+    $('toggleMissingId').textContent=d.enabled?'Выключить предупреждения об отсутствии ID':'Включить предупреждения об отсутствии ID';
+    $('missingIdInfo').textContent=d.enabled?
+      '✓ Уведомления включены. Новые отчёты без ID не учитываются до исправления; бот отправит один ответ в той же теме Telegram.':
+      'Уведомления выключены. Обычная обработка отчётов продолжается без изменений.';
+  }catch(e){$('missingIdInfo').textContent='Ошибка проверки уведомлений: '+e.message;}
+}
+$('toggleMissingId').onclick=async()=>{
+  const enabled=!missingIdConfig.enabled;
+  if(enabled&&!confirm('Включить предупреждения в Telegram для новых отчётов без ID сборки? До исправления такие отчёты не попадут в Google Таблицу.'))return;
+  const b=$('toggleMissingId');b.disabled=true;
+  try{
+    const response=await fetch('/api/missing-id-notifications',{
+      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled})});
+    const d=await response.json();if(!response.ok)throw Error(d.error||'Ошибка');
+    await refreshMissingIdStatus();
+  }catch(e){alert('Не удалось изменить уведомления: '+e.message)}finally{b.disabled=false;}
+};
+refreshMissingIdStatus();
+
+async function refreshAutoStatus(fill=false){
+  try{
+    const response=await fetch('/api/auto-write-settings');const d=await response.json();
+    if(!response.ok)throw Error(d.error||'Ошибка');autoConfig=d;
+    $('toggleAuto').textContent=d.enabled?'Выключить автообновление':'Включить автообновление';
+    if(fill&&d.enabled&&d.sid&&loadedSheetUrl){
+      const url=new URL(loadedSheetUrl);const gid=url.hash.match(/gid=(\d+)/)?.[1]||url.searchParams.get('gid')||'0';
+      if(d.gid===gid){$('partCol').value=String(d.part_col);$('pointsCol').value=String(d.points_col);$('firstRow').value=String(d.first_row);$('mode').value=d.mode;}
+    }
+    const last=d.state?.last_success?' · последняя проверка: '+d.state.last_success.replace('T',' ').slice(0,19)+' UTC':'';
+    const problem=d.state?.last_error?' · ОШИБКА: '+d.state.last_error:'';
+    $('autoInfo').textContent=(d.enabled?'✓ Автообновление включено':'Автообновление выключено')+last+problem;
+  }catch(e){$('autoInfo').textContent='Ошибка проверки автообновления: '+e.message;}
+}
+$('toggleAuto').onclick=async()=>{
+  const enabling=!autoConfig.enabled;
+  if(enabling&&!sheetData){alert('Сначала загрузи Google Таблицу');return;}
+  if(enabling&&!googleWriteReady){alert('Настрой сервисный аккаунт с правом редактирования');return;}
+  if(enabling&&!confirm('Включить автоматическую запись? Приложение может сразу обновить Google Таблицу по ещё не учтённым отчётам.\nПартномера: '+$('partCol').selectedOptions[0]?.textContent+'\nПоинты: '+$('pointsCol').selectedOptions[0]?.textContent+'\nПервая строка: '+$('firstRow').value))return;
+  const b=$('toggleAuto');b.disabled=true;
+  try{
+    const payload={enabled:enabling};
+    if(enabling)Object.assign(payload,{part_col:Number($('partCol').value),points_col:Number($('pointsCol').value),first_row:Number($('firstRow').value),mode:$('mode').value});
+    const r=await fetch('/api/auto-write-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const data=await r.json();if(!r.ok)throw Error(data.error||'Ошибка настройки');
+    await refreshAutoStatus();
+  }catch(e){alert(e.message);}finally{b.disabled=false;}
+};
+setInterval(()=>refreshAutoStatus(),30000);
+function invalidatePlan(){planToken=null;$('applySheet').disabled=true;$('applyHint').textContent='Для записи выполните сравнение заново.';}
+for(let id of ['partCol','pointsCol','firstRow','start','end','mode','sheetUrl']){$(id).addEventListener('change',invalidatePlan);}
+const colName=i=>{let v='';for(i++;i;i=Math.floor((i-1)/26))v=String.fromCharCode(65+(i-1)%26)+v;return v};
+async function loadSheet({automatic=false}={}){
+  const b=$('loadSheet');b.disabled=true;b.textContent='Загрузка…';
+  $('defaultSheetInfo').textContent=automatic?'Загружаем сохранённую таблицу…':'Проверяем ссылку…';
+  try{
+    const res=await fetch('/api/sheet',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:$('sheetUrl').value})});
+    const data=await res.json();if(!res.ok)throw Error(data.error||'Ошибка загрузки');sheetData=data;loadedSheetUrl=$('sheetUrl').value.trim();
+    const c=$('partCol'),p=$('pointsCol'),id=$('idCol');c.replaceChildren();p.replaceChildren();id.replaceChildren();
+    const header=data.rows[0]||[];
+    for(let i=0;i<Math.max(data.width,3);i++){
+      const label=colName(i)+(header[i]?' — '+header[i]:'');
+      for(const select of (i<data.width?[c,p,id]:[id])){
+        const option=document.createElement('option');option.value=String(i);option.textContent=label;select.appendChild(option)}
+    }
+    c.value='0';p.value=String(Math.min(1,Math.max(0,data.width-1)));id.value='2';
+    try{const r=await fetch('/api/assembly-id-column');if(r.ok){const settings=await r.json();if(id.querySelector('option[value="'+settings.id_col+'"]'))id.value=String(settings.id_col)}}catch(e){console.warn('ID column preference:',e)}
+    $('sheetInfo').textContent='Загружено строк: '+data.count+' · Вкладка gid='+data.gid;
+    $('sheetSetup').classList.remove('hidden');$('sheetResult').classList.add('hidden');
+    comparison=[];$('sheetSearch').value='';$('sheetRows').replaceChildren();filterSheetRows();invalidatePlan();
+    $('defaultSheetInfo').textContent='✓ Таблица загружена и сохранена как основная.';await refreshAutoStatus(true);
+  }catch(e){
+    sheetData=null;loadedSheetUrl=null;invalidatePlan();$('sheetSetup').classList.add('hidden');$('sheetResult').classList.add('hidden');
+    $('defaultSheetInfo').textContent='Ошибка загрузки: '+e.message+'. Предыдущая сохранённая ссылка не изменена.';
+    if(!automatic)alert(e.message);
+  }finally{b.disabled=false;b.textContent='Загрузить и сохранить'}
+}
+$('loadSheet').onclick=()=>loadSheet();
+$('idCol').addEventListener('change',async()=>{
+  try{const response=await fetch('/api/assembly-id-column',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id_col:Number($('idCol').value)})});
+  const d=await response.json();if(!response.ok)throw Error(d.error||'Ошибка');}
+  catch(e){alert('Не удалось сохранить столбец ID сборки: '+e.message)}
+});
+async function initDefaultSheet(){
+  try{
+    const res=await fetch('/api/sheet-default');const data=await res.json();
+    if(!res.ok)throw Error(data.error||'Ошибка чтения настроек');
+    if(data.url){$('sheetUrl').value=data.url;await loadSheet({automatic:true});}
+    else{$('defaultSheetInfo').textContent='Вставь ссылку один раз — приложение запомнит её.';}
+  }catch(e){$('defaultSheetInfo').textContent='Не удалось загрузить настройки таблицы: '+e.message;}
+}
+initDefaultSheet();
+$('compareSheet').onclick=async()=>{if(!sheetData)return;if($('sheetUrl').value.trim()!==loadedSheetUrl){alert('Сначала нажми «Загрузить и сохранить» для этой ссылки.');return;}const b=$('compareSheet');b.disabled=true;b.textContent='Сравнение…';try{
+const pc=Number($('partCol').value),vc=Number($('pointsCol').value),first=Number($('firstRow').value);
+if(pc===vc)throw Error('Выбери разные столбцы партномеров и поинтов');
+if(!Number.isInteger(first)||first<1||first>sheetData.count+1)throw Error('Проверь номер первой строки');
+const entries=sheetData.rows.slice(first-1).map((r,i)=>({row:i+first,part:r[pc]||'',old:r[vc]||''}));
+const args={rows:entries.map(x=>({part:x.part,old:x.old})),part_col:pc,points_col:vc,first_row:first,start:$('start').value,end:$('end').value,mode:$('mode').value};
+const res=await fetch(googleWriteReady?'/api/prepare-write':'/api/compare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(args)});
+const data=await res.json();if(!res.ok)throw Error(data.error||'Ошибка сравнения');
+planToken=data.plan_token||null;$('applySheet').disabled=!planToken||!data.has_changes;
+$('applyHint').textContent=!googleWriteReady?'Запись недоступна: настрой сервисный аккаунт для автоматического изменения Google Таблицы.':(data.has_changes?'Проверено через Google Sheets API. Будет обновлено: '+data.changed+'; добавлено новых: '+data.added+'; на проверке: '+(data.held||0)+'.':'Изменений нет — повторные записи не требуются.');
+comparison=data.results.map((r,i)=>({...r,row:r.row??first+i}));
+$('sheetResult').classList.remove('hidden');setSheetResultExpanded(true);
+$('sheetStats').textContent='На ручной проверке: '+(data.held||0)+' · Изначально строк: '+data.original+' · Усреднено/заполнено: '+data.changed+' · Совпадает: '+data.unchanged+' · Новых партномеров: '+data.added+' · Без отчётов Telegram: '+data.missing+' · Всего в результате: '+data.total;
+
+const body=$('sheetRows');body.replaceChildren();for(const x of comparison){const tr=document.createElement('tr');tr.dataset.part=String(x.part||'').toLocaleLowerCase();
+for(const v of [x.row,x.part,x.old,x.telegram??'—',x.output,x.status]){const td=document.createElement('td');td.textContent=v;tr.appendChild(td)}
+tr.lastChild.className=['Усреднён','Заполнен','Новый партномер','На проверке'].includes(x.status)?'changed':x.status==='Совпадает'?'ok':'muted';body.appendChild(tr)}
+filterSheetRows();$('loadReview').click();
+$('sheetResult').scrollIntoView({behavior:'smooth',block:'start'});
+}catch(e){alert(e.message)}finally{b.disabled=false;b.textContent='Сравнить с Telegram'}};
+$('applySheet').onclick=async()=>{if(!planToken){alert('Сначала нажми «Сравнить с Telegram»');return;}
+const changes=comparison.filter(x=>['Усреднён','Заполнен','Новый партномер'].includes(x.status));
+if(!confirm('Записать изменения в Google Таблицу?\nИзменяемых/новых партномеров: '+changes.length+'\nЭто действие изменит настоящую таблицу.'))return;
+const btn=$('applySheet');btn.disabled=true;btn.textContent='Запись в Google…';
+try{const r=await fetch('/api/apply-write',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plan_token:planToken})});const data=await r.json();if(!r.ok)throw Error(data.error||'Ошибка записи');
+planToken=null;$('writeStatus').textContent='✓ '+data.message+' · Изменено ячеек: '+data.updated_cells+'.';
+await loadSheet();$('writeStatus').textContent='✓ Google Таблица обновлена. Ячеек записано: '+data.updated_cells+'. Для просмотра нового состояния нажми «Сравнить с Telegram».';
+}catch(e){$('writeStatus').textContent='Ошибка записи: '+e.message;alert(e.message);}finally{btn.textContent='Добавить в таблицу';btn.disabled=true;}};
+</script></body></html>
