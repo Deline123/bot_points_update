@@ -1,49 +1,152 @@
-"""Fail-closed HMAC gateway with shared PostgreSQL replay protection."""
+"""Independent web login and signed StaffFlow gateway, fail closed."""
 import hashlib
 import hmac
 import os
+import secrets
 import time
-from flask import jsonify, request
+from flask import g, jsonify, request, session, redirect, render_template_string
+from werkzeug.security import check_password_hash
 
 WINDOW = 60
+SESSION_TTL = 8 * 3600
+LOGIN_PAGE = """<!doctype html><html lang="ru"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BOT Point — вход</title>
+<style>body{background:#111827;color:#e5e7eb;font:16px system-ui;display:grid;place-items:center;min-height:95vh;margin:0}main{width:min(340px,86vw);padding:28px;background:#1f2937;border:1px solid #374151;border-radius:16px}h1{margin-top:0}input,button{box-sizing:border-box;width:100%;padding:12px;margin:10px 0;border:1px solid #475569;border-radius:8px;font:inherit}input{background:#111827;color:#fff}button{background:#2563eb;color:white;cursor:pointer}p{color:#a5b4c7}</style>
+<main><h1>BOT Point</h1><p>Независимый вход администратора</p>
+{% if error %}<p role="alert">{{ error }}</p>{% endif %}
+<form method="post" action="/login"><input type="hidden" name="csrf" value="{{ csrf }}">
+<label>Пароль<input type="password" name="password" autocomplete="current-password" required maxlength="256"></label>
+<button type="submit">Войти</button></form></main></html>"""
 
 def signature(secret, method, path, query, timestamp, nonce, body):
     digest = hashlib.sha256(body).hexdigest()
     msg = '\n'.join((method.upper(), path, query, timestamp, nonce, digest))
     return hmac.new(secret.encode(), msg.encode(), hashlib.sha256).hexdigest()
 
+def _password_hash():
+    return os.environ.get('BOT_POINTS_ADMIN_PASSWORD_HASH', '').strip()
+
+def _session_marker():
+    return hashlib.sha256(_password_hash().encode()).hexdigest()
+
+def _independent_session():
+    return bool(_password_hash() and session.get('points_admin') == _session_marker()
+                and isinstance(session.get('points_until'),int)
+                and session['points_until'] > int(time.time()))
+
+def _login_allowed():
+    # Shared DB throttle, including after process restart; no untrusted IP header.
+    from neon_store import connect
+    bucket=int(time.time())//300
+    with connect() as db:
+        db.execute('DELETE FROM points_login_attempts WHERE bucket < %s',(bucket-1,))
+        row=db.execute('''INSERT INTO points_login_attempts(bucket,attempts)
+            VALUES (%s,1) ON CONFLICT(bucket) DO UPDATE SET
+            attempts=points_login_attempts.attempts+1 RETURNING attempts''',(bucket,)).fetchone()
+    return row['attempts']<=12
+
 def install_gateway_auth(app):
+    app.config.update(SESSION_COOKIE_NAME='bot_points_admin',
+                      SESSION_COOKIE_SECURE=bool(os.environ.get('RENDER')),
+                      SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE='Strict',
+                      MAX_CONTENT_LENGTH=2*1024*1024)
+
+    @app.route('/login', methods=['GET','POST'])
+    def points_login():
+        if not _password_hash() or not os.environ.get('FLASK_SECRET_KEY'):
+            return 'Самостоятельный вход BOT Point ещё не настроен.',503
+        if request.method=='GET':
+            if _independent_session():
+                return redirect('/')
+            session['points_csrf']=secrets.token_urlsafe(32)
+            return render_template_string(LOGIN_PAGE,csrf=session['points_csrf'],error='')
+        token=session.get('points_csrf','')
+        offered=request.form.get('csrf','')
+        if not token or not hmac.compare_digest(token,offered):
+            return 'Обновите страницу входа.',403
+        try:
+            permitted=_login_allowed()
+        except Exception:
+            return 'Сервис входа временно недоступен.',503
+        if not permitted:
+            return 'Слишком много попыток. Повторите через несколько минут.',429
+        password=request.form.get('password','')
+        try:
+            valid=0<len(password)<=256 and check_password_hash(_password_hash(),password)
+        except (TypeError,ValueError):
+            valid=False
+        if not valid:
+            return render_template_string(LOGIN_PAGE,csrf=token,error='Неверный пароль.'),401
+        session.clear()
+        session['points_admin']=_session_marker()
+        session['points_until']=int(time.time())+SESSION_TTL
+        return redirect('/')
+
+    @app.route('/logout',methods=['POST'])
+    def points_logout():
+        if request.headers.get('X-Bot-Points-Request')!='1':
+            return jsonify(error='Forbidden'),403
+        session.clear()
+        return jsonify(ok=True)
+
     @app.before_request
     def verify():
-        # Public liveness only; no user data, configuration, or mutations.
         if request.path == '/healthz' and request.method == 'GET':
             return None
-        secret = os.environ.get('BOT_POINTS_GATEWAY_SECRET', '')
-        if len(secret) < 32:
-            return jsonify(error='Gateway not configured'), 503
+        if request.path == '/login' and request.method in ('GET','POST'):
+            return None
         timestamp = request.headers.get('X-Points-Timestamp', '')
         nonce = request.headers.get('X-Points-Nonce', '')
         signed = request.headers.get('X-Points-Signature', '')
-        if not timestamp.isdecimal() or len(timestamp) > 15 or not 16 <= len(nonce) <= 128 or len(signed) != 64:
-            return jsonify(error='Unauthorized'), 401
-        now = int(time.time())
-        if abs(now - int(timestamp)) > WINDOW:
-            return jsonify(error='Unauthorized'), 401
-        expected = signature(secret, request.method, request.path, request.query_string.decode('latin-1'), timestamp, nonce, request.get_data(cache=True))
-        if not hmac.compare_digest(expected, signed):
-            return jsonify(error='Unauthorized'), 401
+        if not (timestamp or nonce or signed):
+            if _independent_session():
+                if request.method not in ('GET','HEAD') and request.headers.get('X-Bot-Points-Request')!='1':
+                    return jsonify(error='Forbidden'),403
+                g.points_authenticated=True
+                return None
+            if request.path=='/' and request.method=='GET' and _password_hash():
+                return redirect('/login')
+            if not any(len(os.environ.get(k,''))>=32 for k in
+                       ('BOT_POINTS_GATEWAY_SECRET','STAFFFLOW_POINTS_GATEWAY_SECRET')) and not _password_hash():
+                return jsonify(error='Gateway not configured'),503
+            return jsonify(error='Unauthorized'),401
+        keys=[os.environ.get(k,'') for k in
+              ('STAFFFLOW_POINTS_GATEWAY_SECRET','BOT_POINTS_GATEWAY_SECRET')]
+        keys=[k for k in keys if len(k)>=32]
+        if not keys:
+            return jsonify(error='Gateway not configured'),503
+        if not timestamp.isdecimal() or len(timestamp)>15 or not 16<=len(nonce)<=128 or len(signed)!=64:
+            return jsonify(error='Unauthorized'),401
+        now=int(time.time())
+        if abs(now-int(timestamp))>WINDOW:
+            return jsonify(error='Unauthorized'),401
+        if not any(hmac.compare_digest(signature(key,request.method,request.path,
+                request.query_string.decode('latin-1'),timestamp,nonce,request.get_data(cache=True)),signed) for key in keys):
+            return jsonify(error='Unauthorized'),401
         if not os.environ.get('DATABASE_URL'):
-            return jsonify(error='Replay protection unavailable'), 503
+            return jsonify(error='Replay protection unavailable'),503
         try:
             from neon_store import connect
             with connect() as db:
-                db.execute('DELETE FROM gateway_nonces WHERE expires_at < %s', (now,))
-                row = db.execute('INSERT INTO gateway_nonces(nonce, expires_at) VALUES (%s, %s) ON CONFLICT DO NOTHING RETURNING nonce', (nonce, now + WINDOW)).fetchone()
+                db.execute('DELETE FROM gateway_nonces WHERE expires_at < %s',(now,))
+                row=db.execute('INSERT INTO gateway_nonces(nonce,expires_at) VALUES (%s,%s) ON CONFLICT DO NOTHING RETURNING nonce',
+                               (nonce,int(timestamp)+WINDOW)).fetchone()
                 if row is None:
-                    return jsonify(error='Replay rejected'), 401
+                    return jsonify(error='Replay rejected'),401
         except Exception:
-            app.logger.exception('Gateway nonce verification failed')
-            return jsonify(error='Gateway unavailable'), 503
+            return jsonify(error='Gateway unavailable'),503
+        g.points_authenticated=True
+        return None
+
+    @app.after_request
+    def security_headers(response):
+        response.headers['Cache-Control']='no-store'
+        response.headers['X-Content-Type-Options']='nosniff'
+        response.headers['X-Frame-Options']='DENY'
+        response.headers['Referrer-Policy']='no-referrer'
+        response.headers['Content-Security-Policy']="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+        return response
 
 def sign_gateway_request(secret, method, path, query, body, *, nonce, timestamp):
     return {'X-Points-Timestamp': str(timestamp), 'X-Points-Nonce': nonce,
