@@ -69,7 +69,22 @@
 <div class="feature-action"><button type="button" id="syncHistory">↻ Проверить историю сообщений</button><span class="hint" id="historyLast">Последняя проверка: нет данных</span></div>
 <p id="syncStatus" class="feature-footnote" role="status" aria-live="polite">История считывается через настроенную Telegram-сессию.</p>
 <details class="tech-box"><summary>Технические сведения</summary><p class="hint" id="historyTechnical">Проверяем параметры подключения…</p><p class="hint">История из Telegram загружается в локальную базу. Запись поинтов в Google Таблицу управляется отдельно. ID сборки пока не участвует в расчёте.</p><p class="hint">Если Telegram не авторизован, подключи аккаунт через Bot Manager или <code>login_telegram.bat</code>.</p></details></section><section class="panel"><h2>Проверка сообщений</h2><p class="hint">Сюда также попадают случаи увеличения поинтов более чем на 2 относительно Google. До одобрения такие значения не записываются. По каждому сообщению складываются числа в конце строк (кроме строки партномера и итоговой строки). При расхождении сообщение не влияет на автоматическую запись. Проверь рассчитанные поинты, при необходимости исправь число и нажми «Одобрить» — отчёт будет сразу отправлен в Google.</p><div class="actions"><button id="loadReview" class="secondary">Обновить список</button></div><p id="reviewCount" class="stats"></p><div class="tablewrap"><table><thead><tr><th>Партномер</th><th>Сумма / Google</th><th>Новые поинты</th><th>Причина</th><th>Исходное сообщение</th><th>Одобрить</th></tr></thead><tbody id="reviewRows"></tbody></table></div></section>
-<p class="muted">Данные собираются ботом из выбранной темы и дополняются синхронизацией через Telethon. Для постоянного сбора новых сообщений приложение должно работать.</p></main><script>
+<p class="muted">Данные собираются ботом из выбранной темы и дополняются синхронизацией через Telethon. <a href="/" id="points-back" hidden>Вернуться в StaffFlow</a> <button type="button" id="points-logout" hidden>Выйти</button> Для постоянного сбора новых сообщений приложение должно работать.</p></main><script>
+if(location.pathname.startsWith('/bot-points')){
+  document.getElementById('points-back').hidden=false;
+}else{
+  const logout=document.getElementById('points-logout');
+  logout.hidden=false;
+  logout.onclick=async()=>{const r=await fetch('/logout',{method:'POST'});if(r.ok)location.href='/login'};
+}
+const originalFetch=window.fetch.bind(window);
+window.fetch=(url,options={})=>{
+  const headers=new Headers(options.headers||{});
+  headers.set('X-Bot-Points-Request','1');
+  headers.set('X-StaffFlow-Request','1');
+  return originalFetch(url,{...options,headers});
+};
+
 const $=id=>document.getElementById(id);
 async function updateTelegramHistory(){
   try{
