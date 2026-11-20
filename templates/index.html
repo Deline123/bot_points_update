@@ -228,7 +228,7 @@ function filterSheetRows(){
 }
 $('sheetSearch').addEventListener('input',filterSheetRows);
 $('clearSheetSearch').onclick=()=>{$('sheetSearch').value='';filterSheetRows();$('sheetSearch').focus()};
-async function refreshWriteAccess(){try{let r=await fetch('/api/sheet-write-status');let d=await r.json();googleWriteReady=!!d.configured; $('writeAccess').textContent=googleWriteReady?'✓ Запись включена. Сервисный аккаунт: '+d.service_email:'Запись отключена. Добавь JSON ключ сервисного аккаунта и выдай ему роль «Редактор» в Google Таблице (см. README). Предпросмотр работает без ключа.';}catch(e){googleWriteReady=false;$('writeAccess').textContent='Не удалось проверить доступ к записи';}}
+async function refreshWriteAccess(){try{let r=await fetch('/api/sheet-write-status');let d=await r.json();googleWriteReady=!!d.configured; $('writeAccess').textContent=d.writes_enabled===false?'Первый запуск: запись Google Sheets заблокирована до проверки подключения.':googleWriteReady?'✓ Запись включена. Сервисный аккаунт: '+d.service_email:'Запись отключена. Добавь JSON ключ сервисного аккаунта и выдай ему роль «Редактор» в Google Таблице (см. README). Предпросмотр работает без ключа.';}catch(e){googleWriteReady=false;$('writeAccess').textContent='Не удалось проверить доступ к записи';}}
 refreshWriteAccess();
 let autoConfig={enabled:false};
 let missingIdConfig={enabled:false};
