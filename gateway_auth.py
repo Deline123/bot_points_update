@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 import os
+import re
 import secrets
 import time
 from flask import g, jsonify, request, session, redirect, render_template_string
@@ -9,6 +10,8 @@ from werkzeug.security import check_password_hash
 
 WINDOW = 60
 SESSION_TTL = 8 * 3600
+SSO_SESSION_TTL = 3600
+SSO_TICKET_TTL = 60
 LOGIN_PAGE = """<!doctype html><html lang="ru"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>BOT Point — вход</title>
@@ -35,6 +38,53 @@ def _independent_session():
                 and isinstance(session.get('points_until'),int)
                 and session['points_until'] > int(time.time()))
 
+def _sso_marker():
+    return hashlib.sha256(os.environ.get('STAFFFLOW_POINTS_GATEWAY_SECRET','').encode()).hexdigest()
+
+def _sso_session():
+    return bool(len(os.environ.get('STAFFFLOW_POINTS_GATEWAY_SECRET',''))>=32
+                and session.get('points_sso')==_sso_marker()
+                and isinstance(session.get('points_until'),int)
+                and session['points_until']>int(time.time()))
+
+def _valid_sso_ticket(ticket):
+    secret=os.environ.get('STAFFFLOW_POINTS_GATEWAY_SECRET','')
+    if len(secret)<32 or not isinstance(ticket,str) or len(ticket)>200:
+        return False
+    match=re.fullmatch(r'v1\.(\d{1,12})\.([0-9a-f]{64})\.([0-9a-f]{64})',ticket)
+    if not match:
+        return False
+    expiry,nonce,sig=match.groups()
+    now=int(time.time())
+    expiry_int=int(expiry)
+    if not now<=expiry_int<=now+SSO_TICKET_TTL:
+        return False
+    expected=hmac.new(secret.encode(),f'bot-point-sso:v1:{expiry_int}:{nonce}'.encode(),hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig,expected):
+        return False
+    from neon_store import connect
+    with connect() as db:
+        db.execute('DELETE FROM gateway_nonces WHERE expires_at < %s',(now,))
+        row=db.execute('INSERT INTO gateway_nonces(nonce,expires_at) VALUES (%s,%s) ON CONFLICT DO NOTHING RETURNING nonce',
+                       ('sso:'+nonce,expiry_int)).fetchone()
+        return row is not None
+
+SSO_PAGE = """<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BOT Point — подключение</title><style>body{background:#111827;color:#e5e7eb;font:16px system-ui;padding:32px}a{color:#93c5fd}</style>
+<h1>BOT Point</h1><p id="notice">Подключение к независимому приложению…</p>
+<a href="/login">Самостоятельный вход</a>
+<script>
+(async()=>{
+ const ticket=new URLSearchParams(location.hash.slice(1)).get('ticket')||'';
+ history.replaceState(null,'',location.pathname);
+ try{
+  const r=await fetch('/sso',{method:'POST',headers:{'Content-Type':'application/json','X-Bot-Points-Request':'1'},body:JSON.stringify({ticket})});
+  if(!r.ok)throw Error('Билет истёк или недействителен. Откройте BOT Point заново из StaffFlow.');
+  location.replace('/');
+ }catch(e){document.getElementById('notice').textContent=e.message}
+})();
+</script></html>"""
+
 def _login_allowed():
     # Shared DB throttle, including after process restart; no untrusted IP header.
     from neon_store import connect
@@ -52,12 +102,33 @@ def install_gateway_auth(app):
                       SESSION_COOKIE_HTTPONLY=True,SESSION_COOKIE_SAMESITE='Strict',
                       MAX_CONTENT_LENGTH=2*1024*1024)
 
+    @app.route('/sso',methods=['GET','POST'])
+    def points_sso():
+        if not os.environ.get('FLASK_SECRET_KEY'):
+            return 'Вход BOT Point ещё не настроен.',503
+        if request.method=='GET':
+            return SSO_PAGE
+        if request.headers.get('X-Bot-Points-Request')!='1':
+            return jsonify(error='Forbidden'),403
+        data=request.get_json(silent=True) or {}
+        if not isinstance(data,dict):
+            return jsonify(error='Invalid ticket'),400
+        try:
+            if not _valid_sso_ticket(data.get('ticket')):
+                return jsonify(error='Invalid or expired ticket'),401
+        except Exception:
+            return jsonify(error='SSO unavailable'),503
+        session.clear()
+        session['points_sso']=_sso_marker()
+        session['points_until']=int(time.time())+SSO_SESSION_TTL
+        return jsonify(ok=True)
+
     @app.route('/login', methods=['GET','POST'])
     def points_login():
         if not _password_hash() or not os.environ.get('FLASK_SECRET_KEY'):
             return 'Самостоятельный вход BOT Point ещё не настроен.',503
         if request.method=='GET':
-            if _independent_session():
+            if _independent_session() or _sso_session():
                 return redirect('/')
             session['points_csrf']=secrets.token_urlsafe(32)
             return render_template_string(LOGIN_PAGE,csrf=session['points_csrf'],error='')
@@ -94,13 +165,13 @@ def install_gateway_auth(app):
     def verify():
         if request.path == '/healthz' and request.method == 'GET':
             return None
-        if request.path == '/login' and request.method in ('GET','POST'):
+        if request.path in ('/login','/sso') and request.method in ('GET','POST'):
             return None
         timestamp = request.headers.get('X-Points-Timestamp', '')
         nonce = request.headers.get('X-Points-Nonce', '')
         signed = request.headers.get('X-Points-Signature', '')
         if not (timestamp or nonce or signed):
-            if _independent_session():
+            if _independent_session() or _sso_session():
                 if request.method not in ('GET','HEAD') and request.headers.get('X-Bot-Points-Request')!='1':
                     return jsonify(error='Forbidden'),403
                 g.points_authenticated=True
