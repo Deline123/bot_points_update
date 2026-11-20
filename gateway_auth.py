@@ -30,11 +30,28 @@ def signature(secret, method, path, query, timestamp, nonce, body):
 def _password_hash():
     return os.environ.get('BOT_POINTS_ADMIN_PASSWORD_HASH', '').strip()
 
+def _password_config():
+    hashed=_password_hash()
+    if hashed:
+        return 'hash:'+hashed
+    password=os.environ.get('BOT_POINTS_ADMIN_PASSWORD','')
+    return 'password:'+password if 16<=len(password)<=256 else ''
+
+def _password_matches(password):
+    hashed=_password_hash()
+    if not 0<len(password)<=256:
+        return False
+    if hashed:
+        return check_password_hash(hashed,password)
+    configured=os.environ.get('BOT_POINTS_ADMIN_PASSWORD','')
+    return 16<=len(configured)<=256 and hmac.compare_digest(
+        hashlib.sha256(configured.encode()).digest(),hashlib.sha256(password.encode()).digest())
+
 def _session_marker():
-    return hashlib.sha256(_password_hash().encode()).hexdigest()
+    return hashlib.sha256(_password_config().encode()).hexdigest()
 
 def _independent_session():
-    return bool(_password_hash() and session.get('points_admin') == _session_marker()
+    return bool(_password_config() and session.get('points_admin') == _session_marker()
                 and isinstance(session.get('points_until'),int)
                 and session['points_until'] > int(time.time()))
 
@@ -125,7 +142,7 @@ def install_gateway_auth(app):
 
     @app.route('/login', methods=['GET','POST'])
     def points_login():
-        if not _password_hash() or not os.environ.get('FLASK_SECRET_KEY'):
+        if not _password_config() or not os.environ.get('FLASK_SECRET_KEY'):
             return 'Самостоятельный вход BOT Point ещё не настроен.',503
         if request.method=='GET':
             if _independent_session() or _sso_session():
@@ -144,7 +161,7 @@ def install_gateway_auth(app):
             return 'Слишком много попыток. Повторите через несколько минут.',429
         password=request.form.get('password','')
         try:
-            valid=0<len(password)<=256 and check_password_hash(_password_hash(),password)
+            valid=_password_matches(password)
         except (TypeError,ValueError):
             valid=False
         if not valid:
@@ -176,10 +193,10 @@ def install_gateway_auth(app):
                     return jsonify(error='Forbidden'),403
                 g.points_authenticated=True
                 return None
-            if request.path=='/' and request.method=='GET' and _password_hash():
+            if request.path=='/' and request.method=='GET' and _password_config():
                 return redirect('/login')
             if not any(len(os.environ.get(k,''))>=32 for k in
-                       ('BOT_POINTS_GATEWAY_SECRET','STAFFFLOW_POINTS_GATEWAY_SECRET')) and not _password_hash():
+                       ('BOT_POINTS_GATEWAY_SECRET','STAFFFLOW_POINTS_GATEWAY_SECRET')) and not _password_config():
                 return jsonify(error='Gateway not configured'),503
             return jsonify(error='Unauthorized'),401
         keys=[os.environ.get(k,'') for k in
