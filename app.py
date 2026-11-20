@@ -412,7 +412,12 @@ def poll():
 
 @app.route('/healthz')
 def healthz():
-    return jsonify(status='ok')
+    try:
+        with connect() as c:
+            c.execute("SELECT 1 AS ready").fetchone()
+        return jsonify(status='ok',database='ready')
+    except Exception:
+        return jsonify(status='unavailable'),503
 
 @app.route('/')
 def home():
@@ -1098,6 +1103,8 @@ def reconcile_job(session,sid,gid):
 
 
 def run_write(pc,vc,first,mode='average',only_messages=None,period=None,expected_evidence=None,only_parts=None):
+    if os.getenv('BOT_POINTS_WRITES_ENABLED','')!='1':
+        raise SheetWriteError('Запись Google Sheets отключена.')
     url=get_default_sheet_url()
     sid,gid=parse_sheet_link(url)
     start,end=period if period is not None else (int(time.time())-30*86400,int(time.time())+86400)
@@ -1361,7 +1368,7 @@ def auto_write_loop():
         auto_write_event.wait(timeout=60)
         auto_write_event.clear()
         cfg=auto_settings()
-        if not cfg.get('enabled'):
+        if os.getenv('BOT_POINTS_WRITES_ENABLED','')!='1' or not cfg.get('enabled'):
             continue
         try:
             sid,gid=parse_sheet_link(get_default_sheet_url())
@@ -1375,7 +1382,8 @@ def auto_write_loop():
 
 @app.route('/api/sheet-write-status', methods=['GET'])
 def sheet_write_status():
-    return jsonify(configured=bool(get_service_email()), service_email=get_service_email(),
+    return jsonify(configured=bool(get_service_email()) and os.getenv('BOT_POINTS_WRITES_ENABLED','')=='1',
+                   writes_enabled=os.getenv('BOT_POINTS_WRITES_ENABLED','')=='1', service_email=get_service_email(),
                    auto=auto_settings(),auto_state=auto_state)
 
 
