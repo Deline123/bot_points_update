@@ -68,5 +68,6 @@ def init_schema():
     ]
     with connect() as db:
         statements.append('CREATE TABLE IF NOT EXISTS gateway_nonces (nonce TEXT PRIMARY KEY, expires_at BIGINT NOT NULL)')
+        statements.append('CREATE TABLE IF NOT EXISTS points_login_attempts (bucket BIGINT PRIMARY KEY, attempts INTEGER NOT NULL)')
         for sql in statements:
             db.execute(sql)

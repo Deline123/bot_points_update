@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from collections import defaultdict
 import requests
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, g
 from urllib.parse import urlparse, parse_qs
 from dotenv import load_dotenv
 from google_sheets_writer import authorize, api_request, read_snapshot, apply_changes, get_service_email, SheetWriteError
@@ -412,7 +412,12 @@ def poll():
 
 @app.route('/healthz')
 def healthz():
-    return jsonify(status='ok')
+    try:
+        with connect() as c:
+            c.execute("SELECT 1 AS ready").fetchone()
+        return jsonify(status='ok',database='ready')
+    except Exception:
+        return jsonify(status='unavailable'),503
 
 @app.route('/')
 def home():
@@ -935,14 +940,12 @@ def label_processed_rows(preview,sid,gid):
 
 
 def only_local_write():
-    if request.remote_addr not in ('127.0.0.1', '::1'):
-        raise PermissionError('Изменять таблицу можно только с этого компьютера')
-    origin = request.headers.get('Origin')
-    if origin and origin.rstrip('/') != request.host_url.rstrip('/'):
-        raise PermissionError('Недопустимый Origin запроса')
-    if request.headers.get('Sec-Fetch-Site') == 'cross-site':
-        raise PermissionError('Недопустимый запрос из другого сайта')
-
+    # All production requests pass through the independent or HMAC gateway.
+    if not getattr(g,'points_authenticated',False):
+        raise PermissionError('Требуется авторизация BOT Point.')
+    if os.getenv('BOT_POINTS_WRITES_ENABLED','')!='1' and request.path in (
+        '/api/manual-apply','/api/apply-write','/api/approve-review','/api/auto-write-settings'):
+        raise PermissionError('Запись Google Sheets выключена до проверки интеграции.')
 
 def auto_settings():
     with connect() as c:
@@ -1100,6 +1103,8 @@ def reconcile_job(session,sid,gid):
 
 
 def run_write(pc,vc,first,mode='average',only_messages=None,period=None,expected_evidence=None,only_parts=None):
+    if os.getenv('BOT_POINTS_WRITES_ENABLED','')!='1':
+        raise SheetWriteError('Запись Google Sheets отключена.')
     url=get_default_sheet_url()
     sid,gid=parse_sheet_link(url)
     start,end=period if period is not None else (int(time.time())-30*86400,int(time.time())+86400)
@@ -1363,7 +1368,7 @@ def auto_write_loop():
         auto_write_event.wait(timeout=60)
         auto_write_event.clear()
         cfg=auto_settings()
-        if not cfg.get('enabled'):
+        if os.getenv('BOT_POINTS_WRITES_ENABLED','')!='1' or not cfg.get('enabled'):
             continue
         try:
             sid,gid=parse_sheet_link(get_default_sheet_url())
@@ -1377,7 +1382,8 @@ def auto_write_loop():
 
 @app.route('/api/sheet-write-status', methods=['GET'])
 def sheet_write_status():
-    return jsonify(configured=bool(get_service_email()), service_email=get_service_email(),
+    return jsonify(configured=bool(get_service_email()) and os.getenv('BOT_POINTS_WRITES_ENABLED','')=='1',
+                   writes_enabled=os.getenv('BOT_POINTS_WRITES_ENABLED','')=='1', service_email=get_service_email(),
                    auto=auto_settings(),auto_state=auto_state)
 
 
