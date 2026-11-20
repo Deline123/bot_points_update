@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from collections import defaultdict
 import requests
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, g
 from urllib.parse import urlparse, parse_qs
 from dotenv import load_dotenv
 from google_sheets_writer import authorize, api_request, read_snapshot, apply_changes, get_service_email, SheetWriteError
@@ -935,14 +935,12 @@ def label_processed_rows(preview,sid,gid):
 
 
 def only_local_write():
-    if request.remote_addr not in ('127.0.0.1', '::1'):
-        raise PermissionError('Изменять таблицу можно только с этого компьютера')
-    origin = request.headers.get('Origin')
-    if origin and origin.rstrip('/') != request.host_url.rstrip('/'):
-        raise PermissionError('Недопустимый Origin запроса')
-    if request.headers.get('Sec-Fetch-Site') == 'cross-site':
-        raise PermissionError('Недопустимый запрос из другого сайта')
-
+    # All production requests pass through the independent or HMAC gateway.
+    if not getattr(g,'points_authenticated',False):
+        raise PermissionError('Требуется авторизация BOT Point.')
+    if os.getenv('BOT_POINTS_WRITES_ENABLED','')!='1' and request.path in (
+        '/api/manual-apply','/api/apply-write','/api/approve-review','/api/auto-write-settings'):
+        raise PermissionError('Запись Google Sheets выключена до проверки интеграции.')
 
 def auto_settings():
     with connect() as c:
