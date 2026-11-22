@@ -119,13 +119,17 @@ async def resolve_chat(client, chat_id):
     raise ValueError(f'Группа CHAT_ID={chat_id} не найдена в личном аккаунте Telegram. Проверь .env и доступ к группе.')
 
 
+def forum_request(name,entity,**kwargs):
+    method=getattr(tl_messages,name,None)
+    if method is not None: return method(peer=entity,**kwargs)
+    method=getattr(tl_channels,name,None)
+    if method is not None: return method(channel=entity,**kwargs)
+    raise DiagnosticError('topic_api')
+
+
 async def read_topics(client, entity):
     """List topic IDs using MTProto; no messages are modified."""
-    method = getattr(tl_channels,'GetForumTopicsRequest',None) or getattr(tl_messages,'GetForumTopicsRequest',None)
-    if method is None: raise DiagnosticError('topic_api')
-    response = await client(method(
-        peer=entity, q='', offset_date=0, offset_id=0,
-        offset_topic=0, limit=100))
+    response = await client(forum_request('GetForumTopicsRequest',entity,q='',offset_date=0,offset_id=0,offset_topic=0,limit=100))
     return [topic for topic in getattr(response, 'topics', ()) if hasattr(topic, 'id')]
 
 
@@ -141,9 +145,8 @@ async def ensure_topic(client, entity, topic_id):
     found = next((t for t in topics if t.id == topic_id), None)
     # The first page can omit an old/archived topic: retrieve exact topic by ID.
     if found is None:
-        by_id = getattr(tl_channels, 'GetForumTopicsByIDRequest', None) or getattr(tl_messages, 'GetForumTopicsByIDRequest', None)
-        if by_id is not None:
-            response = await client(by_id(peer=entity, topics=[topic_id]))
+        if hasattr(tl_messages,'GetForumTopicsByIDRequest') or hasattr(tl_channels,'GetForumTopicsByIDRequest'):
+            response = await client(forum_request('GetForumTopicsByIDRequest',entity,topics=[topic_id]))
             found = next((t for t in getattr(response, 'topics', ()) if t.id == topic_id), None)
     if found is None:
         raise ValueError(
