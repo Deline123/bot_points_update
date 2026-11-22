@@ -2,6 +2,7 @@ import os, re, time, math, sqlite3, threading, logging, csv, io, subprocess, sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from collections import defaultdict
+from runtime_control import SharedLock, read_status, record_status, dashboard, init_runtime
 import requests
 from flask import Flask, render_template, request, jsonify, g
 from urllib.parse import urlparse, parse_qs
@@ -165,12 +166,16 @@ def connect():
 def init_db():
     if os.getenv('DATABASE_URL'):
         from neon_store import init_schema
-        return init_schema()
+        init_schema()
+        with connect() as c:
+            init_runtime(c)
+        return
     with connect() as c:
         c.execute('CREATE TABLE IF NOT EXISTS messages (chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL, thread_id INTEGER, date_utc INTEGER NOT NULL, part TEXT NOT NULL, points REAL NOT NULL, text TEXT NOT NULL, PRIMARY KEY(chat_id,message_id,part))')
         c.execute('CREATE INDEX IF NOT EXISTS idx_part_date ON messages(part,date_utc)')
         c.execute('CREATE TABLE IF NOT EXISTS review_messages (chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL, thread_id INTEGER, date_utc INTEGER NOT NULL, part TEXT NOT NULL, status TEXT NOT NULL, calculated REAL, last_value REAL, reason TEXT NOT NULL, text TEXT NOT NULL, PRIMARY KEY(chat_id,message_id))')
         c.execute('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+        init_runtime(c)
         # One notification per Telegram message; this table is persistent across upgrades.
         c.execute('CREATE TABLE IF NOT EXISTS missing_id_notifications ('
                   'chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL, thread_id INTEGER, '
@@ -207,8 +212,13 @@ def message_hash(part, points, content):
     return hashlib.sha256(raw.encode('utf-8')).hexdigest()
 
 
-def save_report(c, chat_id, msg_id, thread_id, stamp, content, enforce_missing_id=False):
+def save_report(c, chat_id, msg_id, thread_id, stamp, content, enforce_missing_id=False, event_stamp=None):
     report = parse_report(content)
+    if event_stamp is not None:
+        old=c.execute('SELECT event_utc FROM report_ingest_versions WHERE chat_id=? AND message_id=?',(chat_id,msg_id)).fetchone()
+        if old and int(old['event_utc'])>int(event_stamp):
+            return dict(report, stale=True)
+        c.execute('INSERT INTO report_ingest_versions(chat_id,message_id,event_utc) VALUES(?,?,?) ON CONFLICT(chat_id,message_id) DO UPDATE SET event_utc=excluded.event_utc',(chat_id,msg_id,int(event_stamp)))
     # ID is a validation field only in v3.9.7: Google matching and averages
     # continue to use the part number exactly as before.
     if enforce_missing_id and report['part'] and not report['assembly_id']:
@@ -319,7 +329,8 @@ def store_message(message):
     validate = should_validate_id(event_stamp, settings)
     with connect() as c:
         report = save_report(c, chat_id, msg_id, thread_id, stamp, content,
-                             enforce_missing_id=validate)
+                             enforce_missing_id=validate, event_stamp=event_stamp)
+    if report.get('stale'): return
     if report['part'] and report['assembly_id']:
         resolve_missing_id_warning(chat_id,msg_id)
     elif validate and report['part'] and not report['assembly_id']:
@@ -380,34 +391,45 @@ def assembly_id_column_route():
 
 
 def api(method, **params):
-    r = requests.post(f'https://api.telegram.org/bot{TOKEN}/{method}', json=params, timeout=45)
-    r.raise_for_status()
-    body = r.json()
-    if not body.get('ok'): raise RuntimeError(body.get('description', 'Telegram API error'))
+    # Never include the token-bearing URL or Telegram response body in logs.
+    try:
+        r = requests.post(f'https://api.telegram.org/bot{TOKEN}/{method}', json=params, timeout=45)
+        r.raise_for_status()
+        body = r.json()
+    except requests.HTTPError as exc:
+        code=exc.response.status_code if exc.response is not None else 'unknown'
+        raise RuntimeError(f'Telegram HTTP {code}') from None
+    except (requests.RequestException, ValueError):
+        raise RuntimeError('Telegram connection or response error') from None
+    if not body.get('ok'): raise RuntimeError('Telegram API rejected request')
     return body['result']
 
+def poll_once():
+    """One bounded polling cycle. Offset advances only after durable ingestion."""
+    if not TOKEN:
+        raise RuntimeError('BOT_TOKEN не указан')
+    with connect() as c:
+        row=c.execute("SELECT value FROM meta WHERE key='offset'").fetchone()
+        offset=int(row['value']) if row else 0
+    updates=api('getUpdates',offset=offset,timeout=25,allowed_updates=['message','edited_message'])
+    for update in updates:
+        for key in ('message','edited_message'):
+            if key in update: store_message(update[key])
+        with connect() as c:
+            c.execute("INSERT INTO meta(key,value) VALUES('offset',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(update['update_id']+1),))
+        state['last_update']=datetime.now(timezone.utc).isoformat()
+    state['last_error']=None
+    return len(updates)
+
+
 def poll():
-    state['running'] = True
+    state['running']=True
     while True:
         try:
-            if not TOKEN:
-                state['last_error'] = 'BOT_TOKEN не указан в .env'
-                time.sleep(10); continue
-            # Get updates from the configured bot. Only run one instance at a time.
-            with connect() as c:
-                row = c.execute("SELECT value FROM meta WHERE key='offset'").fetchone()
-                offset = int(row['value']) if row else 0
-            updates = api('getUpdates', offset=offset, timeout=25, allowed_updates=['message', 'edited_message'])
-            for update in updates:
-                if 'message' in update: store_message(update['message'])
-                if 'edited_message' in update: store_message(update['edited_message'])
-                with connect() as c:
-                    c.execute("INSERT INTO meta(key,value) VALUES('offset',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(update['update_id'] + 1),))
-                state['last_update'] = datetime.now(timezone.utc).isoformat()
-            state['last_error'] = None
+            poll_once()
         except Exception as exc:
-            state['last_error'] = str(exc)
-            logger.exception('Telegram polling error')
+            state['last_error']=str(exc)[:200]
+            logger.warning('Telegram polling error: %s',type(exc).__name__)
             time.sleep(5)
 
 @app.route('/healthz')
@@ -428,7 +450,17 @@ def status():
     with connect() as c:
         count = c.execute("SELECT COUNT(DISTINCT CAST(chat_id AS TEXT)||':'||CAST(message_id AS TEXT)) AS n FROM messages").fetchone()['n']
         groups = [dict(r) for r in c.execute('SELECT chat_id,thread_id,COUNT(DISTINCT message_id) AS count FROM messages GROUP BY chat_id,thread_id ORDER BY count DESC LIMIT 10')]
-    return jsonify(configured=bool(TOKEN), chat_id=CHAT_ID or None, thread_id=THREAD_ID or None, saved_messages=count, scopes=groups, **state)
+    live=dict(state)
+    if os.getenv('DATABASE_URL'):
+        worker=read_status(connect,'telegram')
+        live.update(running=worker.get('state')=='ok' and int(time.time())-worker.get('at',0)<360,
+                    last_error=worker.get('error'),last_update=worker.get('last_update'),bot_name=worker.get('bot_name'))
+    return jsonify(configured=bool(TOKEN), chat_id=CHAT_ID or None, thread_id=THREAD_ID or None, saved_messages=count, scopes=groups, **live)
+
+
+@app.route('/api/runtime-dashboard')
+def runtime_dashboard():
+    return jsonify(**dashboard(connect, CHAT_ID, THREAD_ID, os.environ, auto_settings(), bool(get_service_email()), history_sync_status()))
 
 def parse_sheet_link(url):
     parsed = urlparse(url.strip())
@@ -532,7 +564,7 @@ def review_messages():
             pass
     return jsonify(messages=rows, total=len(rows))
 
-history_lock = threading.Lock()
+history_lock = SharedLock(connect, 741002)
 
 def history_sync_status():
     with connect() as c:
@@ -583,14 +615,14 @@ def sync_history():
     try:
         try:
             proc = subprocess.run([sys.executable, str(ROOT / 'history_sync.py'), 'sync'],
-                                  cwd=ROOT, capture_output=True, text=True, timeout=240)
+                                  cwd=ROOT, capture_output=True, text=True, timeout=240, stdin=subprocess.DEVNULL)
         except subprocess.TimeoutExpired:
             error='Превышено время ожидания (4 минуты). Проверь подключение Telegram.'
             save_history_sync_status(error=error)
             return jsonify(error=error), 504
         output = (proc.stdout + '\n' + proc.stderr).strip()[-2500:]
         if proc.returncode:
-            error=output or 'Ошибка чтения истории'
+            error='Ошибка чтения истории Telegram; проверьте сессию и доступ к теме.' if os.getenv('DATABASE_URL') else (output or 'Ошибка чтения истории')
             save_history_sync_status(error=error)
             return jsonify(error=error), 400
         save_history_sync_status(success=True, message=output)
@@ -598,8 +630,8 @@ def sync_history():
         return jsonify(message=output, **history_sync_status())
     except Exception as exc:
         logger.exception('Telegram history sync failed')
-        save_history_sync_status(error=str(exc))
-        return jsonify(error='Не удалось прочитать историю: '+str(exc)[:180]),500
+        save_history_sync_status(error='Ошибка чтения истории')
+        return jsonify(error='Не удалось прочитать историю Telegram'),500
     finally:
         history_lock.release()
 
@@ -828,7 +860,7 @@ def compare_sheet():
 
 # Every individual Telegram message is counted at most once per sheet. Messages
 # approved by a human enter the same ledger as automatically validated reports.
-write_lock = threading.Lock()
+write_lock = SharedLock(connect, 741003)
 prepared_writes = {}
 PREVIEW_SECONDS = 15 * 60
 auto_write_event = threading.Event()
@@ -943,7 +975,7 @@ def only_local_write():
     # All production requests pass through the independent or HMAC gateway.
     if not getattr(g,'points_authenticated',False):
         raise PermissionError('Требуется авторизация BOT Point.')
-    if os.getenv('BOT_POINTS_WRITES_ENABLED','')!='1' and request.path in (
+    if (os.getenv('BOT_POINTS_WRITES_ENABLED','')!='1' or (os.getenv('DATABASE_URL') and os.getenv('BOT_POINTS_CLOUD_WRITES_CONFIRMED')!='1')) and request.path in (
         '/api/manual-apply','/api/apply-write','/api/approve-review','/api/auto-write-settings'):
         raise PermissionError('Запись Google Sheets выключена до проверки интеграции.')
 
@@ -996,7 +1028,7 @@ def migration_baseline(sid, gid):
                     '(spreadsheet_id,gid,part,chat_id,message_id,evidence_hash,applied_utc) VALUES (?,?,?,?,?,?,?)',
                     (sid,str(gid),r['part'],r['chat_id'],r['message_id'],
                      message_hash(r['part'],r['points'],r['text']),int(time.time())))
-        c.execute('INSERT INTO meta(key,value) VALUES (?,?)', (key,'1'))
+        c.execute('INSERT INTO meta(key,value) VALUES (?,?) ON CONFLICT(key) DO NOTHING', (key,'1'))
 
 
 def pending_telegram_points(sid, gid, mode, start_stamp, end_stamp, only_messages=None):
@@ -1107,6 +1139,11 @@ def run_write(pc,vc,first,mode='average',only_messages=None,period=None,expected
         raise SheetWriteError('Запись Google Sheets отключена.')
     url=get_default_sheet_url()
     sid,gid=parse_sheet_link(url)
+    if os.getenv('DATABASE_URL') and os.getenv('BOT_POINTS_CLOUD_WRITES_CONFIRMED')!='1':
+        raise SheetWriteError('Облачная запись не подтверждена: сначала проверьте журнал прежних операций.')
+    with connect() as c:
+        if c.execute("SELECT 1 FROM manual_point_writes WHERE spreadsheet_id=? AND gid=? AND status IN ('pending','uncertain')",(sid,str(gid))).fetchone():
+            raise SheetWriteError('Есть неподтверждённая ручная запись. Проверьте Google Таблицу до продолжения.')
     start,end=period if period is not None else (int(time.time())-30*86400,int(time.time())+86400)
     # Check SQLite first: an idle bot should not poll the Google API every minute.
     pending=pending_telegram_points(sid,gid,mode,start,end,only_messages)
@@ -1157,9 +1194,15 @@ def execute_write(pc,vc,first,mode='average',only_messages=None,period=None,expe
         auto_state['last_success']=datetime.now(timezone.utc).isoformat()
         auto_state['last_updated_parts']=result['updated_parts']
         auto_state['last_updated_cells']=result['updated_cells']
+        if os.getenv('DATABASE_URL'):
+            try: record_status(connect,'google','ok',details=dict(auto_state))
+            except Exception: logger.warning('Could not persist Google status')
         return result
     except Exception as exc:
         auto_state['last_error']=str(exc)[:250]
+        if os.getenv('DATABASE_URL'):
+            try: record_status(connect,'google','error',error='Ошибка записи Google Sheets; проверьте настройки и журнал.')
+            except Exception: logger.warning('Could not persist Google error')
         raise
     finally:
         write_lock.release()
@@ -1303,6 +1346,9 @@ def manual_apply_route():
             if not plan:
                 return jsonify(error='Это подтверждение уже использовано.'),409
             sid,gid=plan['sid'],plan['gid']
+            with connect() as c:
+                if c.execute("SELECT 1 FROM manual_point_writes WHERE spreadsheet_id=? AND gid=? AND status IN ('pending','uncertain')",(sid,str(gid))).fetchone():
+                    raise SheetWriteError('Есть неподтверждённая ручная запись. Проверьте таблицу.')
             ensure_manual_columns_match_auto(sid,gid,plan['pc'],plan['vc'],plan['first'])
             with authorize() as session:
                 reconcile_job(session,sid,gid)
@@ -1382,15 +1428,23 @@ def auto_write_loop():
 
 @app.route('/api/sheet-write-status', methods=['GET'])
 def sheet_write_status():
-    return jsonify(configured=bool(get_service_email()) and os.getenv('BOT_POINTS_WRITES_ENABLED','')=='1',
-                   writes_enabled=os.getenv('BOT_POINTS_WRITES_ENABLED','')=='1', service_email=get_service_email(),
-                   auto=auto_settings(),auto_state=auto_state)
+    enabled=os.getenv('BOT_POINTS_WRITES_ENABLED','')=='1' and (not os.getenv('DATABASE_URL') or os.getenv('BOT_POINTS_CLOUD_WRITES_CONFIRMED')=='1')
+    return jsonify(configured=bool(get_service_email()) and enabled,
+                   writes_enabled=enabled,service_email=get_service_email(),auto=auto_settings(),auto_state=shared_auto_state())
+
+
+def shared_auto_state():
+    if not os.getenv('DATABASE_URL'): return auto_state
+    saved=read_status(connect,'google')
+    result={**auto_state,**saved.get('details',{})}
+    if saved.get('state')=='error': result['last_error']=saved.get('error')
+    return result
 
 
 @app.route('/api/auto-write-settings', methods=['GET','POST'])
 def auto_write_settings_route():
     if request.method=='GET':
-        return jsonify(**auto_settings(), state=auto_state)
+        return jsonify(**auto_settings(), state=shared_auto_state())
     try:
         only_local_write()
         payload=request.get_json(silent=True) or {}
@@ -1421,19 +1475,23 @@ def prepare_write():
         payload=request.get_json(silent=True) or {}
         pc,vc,first,mode=extract_options(payload)
         sid,gid=parse_sheet_link(get_default_sheet_url())
-        with authorize() as session:
-            reconcile_job(session,sid,gid)
-            snapshot=read_snapshot(session,sid,gid)
-        start,end=requested_period(payload)
-        telegram=pending_telegram_points(sid,gid,mode,start,end)
-        blocked=sync_point_reviews(snapshot,pc,vc,first,telegram,sid,gid,mode,start,end)
-        preview=label_processed_rows(build_write_preview(snapshot,pc,vc,first,telegram,{},blocked),sid,gid)
-        token=secrets.token_urlsafe(30)
-        with write_lock:
+        if not write_lock.acquire(blocking=False):
+            raise SheetWriteError('Запись уже выполняется. Повтори позже.')
+        try:
+            with authorize() as session:
+                reconcile_job(session,sid,gid)
+                snapshot=read_snapshot(session,sid,gid)
+            start,end=requested_period(payload)
+            telegram=pending_telegram_points(sid,gid,mode,start,end)
+            blocked=sync_point_reviews(snapshot,pc,vc,first,telegram,sid,gid,mode,start,end)
+            preview=label_processed_rows(build_write_preview(snapshot,pc,vc,first,telegram,{},blocked),sid,gid)
+            token=secrets.token_urlsafe(30)
             prepared_writes.clear()
             prepared_writes[token]=dict(created=time.time(),sid=sid,gid=gid,
                 fingerprint=snapshot_fingerprint(snapshot), evidence=evidence_fingerprint(telegram),
                 options=(pc,vc,first,mode,start,end))
+        finally:
+            write_lock.release()
         safe={key:value for key,value in preview.items() if key not in ('updates','outcomes')}
         return jsonify(**safe,plan_token=token,has_changes=bool(preview['updates']))
     except PermissionError as exc:

@@ -64,7 +64,8 @@ def sync_shared():
         scanned+=1
         with connect() as db:
             report=save_report(db,chat_id,int(msg['id']),topic_id,date,msg.get('text',''),
-                               enforce_missing_id=should_validate_id(date))
+                               enforce_missing_id=should_validate_id(int(msg.get('edit_date_utc') or date)),
+                               event_stamp=int(msg.get('edit_date_utc') or date))
         if report['points'] is not None:matched+=1
         elif report['part']:review+=1
     with connect() as db:
@@ -253,7 +254,9 @@ async def sync():
     init_db()
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     scanned = matched = review = 0
-    async with TelegramClient(session_source(), api_id, api_hash) as client:
+    client=TelegramClient(session_source(), api_id, api_hash)
+    await client.connect()
+    try:
         await authorize_client(client)
         entity = await resolve_chat(client, chat_id)
         topic = await ensure_topic(client, entity, topic_id)
@@ -265,7 +268,8 @@ async def sync():
             text = msg.message or ''
             with connect() as db:
                 report = save_report(db, chat_id, msg.id, topic_id, int(msg.date.timestamp()), text,
-                                     enforce_missing_id=should_validate_id(int(msg.date.timestamp())))
+                                     enforce_missing_id=should_validate_id(int((msg.edit_date or msg.date).timestamp())),
+                                     event_stamp=int((msg.edit_date or msg.date).timestamp()))
             if report['points'] is not None:
                 matched += 1
             elif report['part']:
@@ -273,6 +277,8 @@ async def sync():
         with connect() as db:
             db.execute('DELETE FROM messages WHERE date_utc < ?', (int(cutoff.timestamp()),))
             db.execute('DELETE FROM review_messages WHERE date_utc < ?', (int(cutoff.timestamp()),))
+    finally:
+        await client.disconnect()
     print(f'Готово. Проверено сообщений в теме: {scanned}. '
           f'Распознано отчётов: {matched}. На проверку: {review}.')
 
