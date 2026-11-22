@@ -6,6 +6,7 @@ import time
 import uuid
 from datetime import datetime, time as day_time
 from zoneinfo import ZoneInfo
+from embedded_runtime import runtime_mode
 
 def init_runtime(c):
     c.execute("CREATE TABLE IF NOT EXISTS report_ingest_versions(chat_id BIGINT NOT NULL,message_id BIGINT NOT NULL,event_utc BIGINT NOT NULL,PRIMARY KEY(chat_id,message_id))")
@@ -111,7 +112,7 @@ def dashboard(connect, chat, topic, env, auto, google_configured, history, *, no
     writes=env.get('BOT_POINTS_WRITES_ENABLED')=='1' and (not env.get('DATABASE_URL') or env.get('BOT_POINTS_CLOUD_WRITES_CONFIRMED')=='1')
     tel_config=bool(env.get('BOT_TOKEN') and chat and topic)
     hist_config=bool(env.get('API_ID') and env.get('API_HASH') and env.get('TELETHON_STRING_SESSION') and chat and topic)
-    return {'version':'4.1.0','counts':{'processed':processed,'review':review,'parts':parts,'errors':errors},
+    return {'version':'4.1.1','runtime_mode':runtime_mode(env),'counts':{'processed':processed,'review':review,'parts':parts,'errors':errors},
             'services':{'worker':worker,'telegram':state('telegram',tel_config),'history':state('history',hist_config,3600),
                         'google':state('google',google_configured,360) if writes and auto.get('enabled') else ('disabled' if google_configured else 'not_configured'),
                         'database':'ok','staffflow':'configured' if len(env.get('STAFFFLOW_POINTS_GATEWAY_SECRET',''))>=32 else 'not_configured'},
