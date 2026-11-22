@@ -5,6 +5,8 @@ Commands: login, topics, sync. Messages are kept for 30 days as before.
 import asyncio
 import os
 import sys
+import json
+from telethon_diagnostics import DiagnosticError, classify, result
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -12,7 +14,7 @@ from dotenv import load_dotenv
 from telethon import TelegramClient, utils
 from telethon.sessions import StringSession
 from telethon.errors import FloodWaitError, RPCError
-from telethon.tl.functions import messages as tl_messages
+from telethon.tl.functions import messages as tl_messages, channels as tl_channels
 
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / '.env')
@@ -119,7 +121,9 @@ async def resolve_chat(client, chat_id):
 
 async def read_topics(client, entity):
     """List topic IDs using MTProto; no messages are modified."""
-    response = await client(tl_messages.GetForumTopicsRequest(
+    method = getattr(tl_channels,'GetForumTopicsRequest',None) or getattr(tl_messages,'GetForumTopicsRequest',None)
+    if method is None: raise DiagnosticError('topic_api')
+    response = await client(method(
         peer=entity, q='', offset_date=0, offset_id=0,
         offset_topic=0, limit=100))
     return [topic for topic in getattr(response, 'topics', ()) if hasattr(topic, 'id')]
@@ -137,7 +141,7 @@ async def ensure_topic(client, entity, topic_id):
     found = next((t for t in topics if t.id == topic_id), None)
     # The first page can omit an old/archived topic: retrieve exact topic by ID.
     if found is None:
-        by_id = getattr(tl_messages, 'GetForumTopicsByIDRequest', None)
+        by_id = getattr(tl_channels, 'GetForumTopicsByIDRequest', None) or getattr(tl_messages, 'GetForumTopicsByIDRequest', None)
         if by_id is not None:
             response = await client(by_id(peer=entity, topics=[topic_id]))
             found = next((t for t in getattr(response, 'topics', ()) if t.id == topic_id), None)
@@ -209,10 +213,11 @@ async def iter_selected_messages(client, entity, topic_id, cutoff):
 
 async def authorize_client(client):
     if not await client.is_user_authorized():
-        raise ValueError('Сессия истекла. Выполни login_telegram.bat')
+        raise DiagnosticError('session_expired')
     me = await client.get_me()
+    if me is None: raise DiagnosticError('session_expired')
     if me.bot:
-        raise ValueError('Сессия Telethon принадлежит боту, а не личному аккаунту. Выполни login_telegram.bat.')
+        raise DiagnosticError('bot_account')
 
 
 async def list_topics_command():
@@ -242,56 +247,98 @@ async def list_topics_command():
                 print('Проверка настройки:', exc)
 
 
-async def sync():
-    if use_shared_telegram():
-        await asyncio.to_thread(sync_shared)
-        return
-    api_id, api_hash = settings()
-    chat_id, topic_id = target_settings()
-    require_session()
-
-    from app import connect, save_report, init_db, should_validate_id
-    init_db()
-    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
-    scanned = matched = review = 0
-    client=TelegramClient(session_source(), api_id, api_hash)
-    await client.connect()
+async def inspect_or_sync(write=False):
+    stage='settings'
+    passed=[]
+    client=None
     try:
+        if use_shared_telegram():
+            if os.getenv('RENDER'): raise DiagnosticError('shared_gateway')
+            if write:
+                await asyncio.to_thread(sync_shared)
+                return result(passed=('settings','read','database'))
+            chat,topic=target_settings()
+            response=await asyncio.to_thread(shared_request,'/v1/topics',{'chat_id':chat})
+            if not any(t.get('id')==topic for t in response.get('topics',[])):
+                raise DiagnosticError('topic_unavailable')
+            return result(passed=('settings','group','topic'))
+        api_id,api_hash=settings()
+        chat_id,topic_id=target_settings()
+        if api_id<=0 or chat_id==0 or topic_id<=0: raise DiagnosticError('settings')
+        passed.append(stage)
+        stage='session'
+        if os.getenv('RENDER') and not os.getenv('TELETHON_STRING_SESSION','').strip():
+            raise DiagnosticError('session_missing')
+        if not os.getenv('TELETHON_STRING_SESSION','').strip() and not Path(SESSION+'.session').exists():
+            raise DiagnosticError('session_missing')
+        source=session_source()
+        client=TelegramClient(source,api_id,api_hash,connection_retries=1,request_retries=1,flood_sleep_threshold=0,timeout=8)
+        passed.append(stage)
+        stage='connection'
+        await client.connect()
+        passed.append(stage)
+        stage='authorization'
         await authorize_client(client)
-        entity = await resolve_chat(client, chat_id)
-        topic = await ensure_topic(client, entity, topic_id)
-        print(f'Синхронизация: тема «{getattr(topic, "title", "")}» (ID {topic_id}), группа {chat_id}.')
-        async for msg in iter_selected_messages(client, entity, topic_id, cutoff):
-            if msg.date is None:
-                continue
-            scanned += 1
-            text = msg.message or ''
+        passed.append(stage)
+        stage='group'
+        entity=await resolve_chat(client,chat_id)
+        passed.append(stage)
+        stage='topic'
+        if topic_id==1: raise DiagnosticError('general_topic')
+        await ensure_topic(client,entity,topic_id)
+        passed.append(stage)
+        stage='read'
+        cutoff=datetime.now(timezone.utc)-timedelta(days=30)
+        if not write:
+            # Probe the exact read path without writing any reports.
+            it=iter_selected_messages(client,entity,topic_id,cutoff)
+            try:
+                await anext(it,None)
+            finally:
+                await it.aclose()
+            passed.append(stage)
+            return result(passed=passed)
+        from app import connect,save_report,init_db,should_validate_id
+        stage='database'
+        init_db()
+        stage='read'
+        async for msg in iter_selected_messages(client,entity,topic_id,cutoff):
+            if msg.date is None: continue
+            stage='database'
+            event=int((msg.edit_date or msg.date).timestamp())
             with connect() as db:
-                report = save_report(db, chat_id, msg.id, topic_id, int(msg.date.timestamp()), text,
-                                     enforce_missing_id=should_validate_id(int((msg.edit_date or msg.date).timestamp())),
-                                     event_stamp=int((msg.edit_date or msg.date).timestamp()))
-            if report['points'] is not None:
-                matched += 1
-            elif report['part']:
-                review += 1
+                save_report(db,chat_id,msg.id,topic_id,int(msg.date.timestamp()),msg.message or '',
+                            enforce_missing_id=should_validate_id(event),event_stamp=event)
+            stage='read'
+        passed.append('read')
+        stage='database'
         with connect() as db:
-            db.execute('DELETE FROM messages WHERE date_utc < ?', (int(cutoff.timestamp()),))
-            db.execute('DELETE FROM review_messages WHERE date_utc < ?', (int(cutoff.timestamp()),))
+            db.execute('DELETE FROM messages WHERE date_utc < ?',(int(cutoff.timestamp()),))
+            db.execute('DELETE FROM review_messages WHERE date_utc < ?',(int(cutoff.timestamp()),))
+        passed.append(stage)
+        return result(passed=passed)
+    except Exception as exc:
+        return result(stage,classify(stage,exc),passed)
     finally:
-        await client.disconnect()
-    print(f'Готово. Проверено сообщений в теме: {scanned}. '
-          f'Распознано отчётов: {matched}. На проверку: {review}.')
+        if client is not None:
+            try: await asyncio.wait_for(client.disconnect(),timeout=3)
+            except Exception: pass
 
+async def sync():
+    return await inspect_or_sync(write=True)
 
-if __name__ == '__main__':
+if __name__=='__main__':
+    command=sys.argv[1] if len(sys.argv)>1 else 'sync'
+    if command in ('sync','diagnose'):
+        try:
+            data=asyncio.run(inspect_or_sync(write=command=='sync'))
+        except Exception:
+            data=result(None,'unknown')
+        print('POINTS_DIAGNOSTIC:'+json.dumps(data,ensure_ascii=False))
+        sys.exit(0 if data['ok'] else 1)
     try:
-        command = sys.argv[1] if len(sys.argv) > 1 else 'sync'
-        if command not in ('login', 'sync', 'topics'):
-            raise ValueError('Использование: python history_sync.py login | topics | sync')
-        asyncio.run({'login': login, 'topics': list_topics_command, 'sync': sync}[command]())
-    except FloodWaitError as exc:
-        print(f'Telegram ограничил запросы. Повтори через {exc.seconds} секунд.')
-        sys.exit(1)
+        if command not in ('login','topics'): raise ValueError('Использование: python history_sync.py login | topics | sync | diagnose')
+        asyncio.run({'login':login,'topics':list_topics_command}[command]())
     except Exception as exc:
         print('Ошибка:', str(exc))
         sys.exit(1)

@@ -6,7 +6,7 @@ import subprocess
 import sys
 import threading
 from app import (connect, init_db, poll_once, state, history_lock, auto_settings, execute_write,
-                 get_default_sheet_url, parse_sheet_link, save_history_sync_status, ROOT, CHAT_ID, THREAD_ID, TOKEN)
+                 get_default_sheet_url, parse_sheet_link, perform_history_sync, ROOT, CHAT_ID, THREAD_ID, TOKEN)
 from runtime_control import record_status, read_status, SharedLock
 
 def configured_history():
@@ -21,16 +21,9 @@ def history_once():
         return False
     if not history_lock.acquire(blocking=False): return False
     try:
-        # No interactive login, no raw output in the durable journal.
-        p=subprocess.run([sys.executable,str(ROOT/'history_sync.py'),'sync'],cwd=ROOT,
-                         timeout=240,stdin=subprocess.DEVNULL,capture_output=True,text=True)
-        if p.returncode: raise RuntimeError('Ошибка синхронизации истории')
-        save_history_sync_status(success=True,message='Автоматическая синхронизация завершена.')
-        safe_record('history','ok')
-        return True
+        return perform_history_sync()['ok']
     except Exception:
-        save_history_sync_status(error='Автоматическая синхронизация не выполнена; проверьте доступ и сессию.')
-        safe_record('history','error',error='Не удалось прочитать историю Telegram.')
+        safe_record('history','error',error='Не удалось сохранить результат синхронизации.')
         return False
     finally:
         history_lock.release()

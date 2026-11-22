@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from collections import defaultdict
 from runtime_control import SharedLock, read_status, record_status, dashboard, init_runtime
+from telethon_diagnostics import run_history, result as diagnostic_result
 import requests
 from flask import Flask, render_template, request, jsonify, g
 from urllib.parse import urlparse, parse_qs
@@ -586,7 +587,8 @@ def history_sync_status():
     return dict(last_success=record.get('last_success'), last_error=record.get('last_error'),
                 last_message=record.get('last_message', ''), valid=valid, review=review,
                 period_days=30, thread_configured=bool(CHAT_ID and THREAD_ID),
-                source='shared' if os.getenv('BOT_MANAGER_TELEGRAM_SHARED', '').strip()=='1' else 'local')
+                source='shared' if os.getenv('BOT_MANAGER_TELEGRAM_SHARED', '').strip()=='1' else ('cloud' if os.getenv('TELETHON_STRING_SESSION','').strip() else 'local'),
+                diagnostic=read_status(connect,'telethon_diagnostic').get('details'))
 
 
 def save_history_sync_status(*, success=False, message='', error=''):
@@ -604,6 +606,33 @@ def get_history_status():
     return jsonify(**history_sync_status())
 
 
+def perform_history_sync():
+    data=run_history(ROOT,'sync',240)
+    if data['ok']:
+        save_history_sync_status(success=True,message='Синхронизация завершена.')
+        record_status(connect,'history','ok')
+        auto_write_event.set()
+    else:
+        save_history_sync_status(error=data['message'])
+        record_status(connect,'history','error',error=data['message'])
+    record_status(connect,'telethon_diagnostic','ok' if data['ok'] else 'error',error=None if data['ok'] else data['message'],details=data)
+    return data
+
+@app.route('/api/telethon-diagnostics', methods=['POST'])
+def diagnose_telethon():
+    try:
+        only_local_write()
+    except PermissionError as exc:
+        return jsonify(error=str(exc)),403
+    if not history_lock.acquire(blocking=False):
+        return jsonify(**diagnostic_result(None,'busy')),409
+    try:
+        data=run_history(ROOT,'diagnose',20)
+        record_status(connect,'telethon_diagnostic','ok' if data['ok'] else 'error',error=None if data['ok'] else data['message'],details=data)
+        return jsonify(**data)
+    finally:
+        history_lock.release()
+
 @app.route('/api/sync-history', methods=['POST'])
 def sync_history():
     try:
@@ -611,31 +640,25 @@ def sync_history():
     except PermissionError as exc:
         return jsonify(error=str(exc)),403
     if not history_lock.acquire(blocking=False):
-        return jsonify(error='Синхронизация уже выполняется'), 409
-    try:
+        return jsonify(error='Синхронизация уже выполняется'),409
+    # Cloud Gunicorn has a short request deadline; run the longer import in-process.
+    if os.getenv('DATABASE_URL'):
+        def task():
+            try:
+                perform_history_sync()
+            except Exception:
+                logger.warning('History sync could not persist status')
+            finally:
+                history_lock.release()
         try:
-            proc = subprocess.run([sys.executable, str(ROOT / 'history_sync.py'), 'sync'],
-                                  cwd=ROOT, capture_output=True, text=True, timeout=240, stdin=subprocess.DEVNULL)
-        except subprocess.TimeoutExpired:
-            error='Превышено время ожидания (4 минуты). Проверь подключение Telegram.'
-            save_history_sync_status(error=error)
-            if os.getenv('DATABASE_URL'): record_status(connect,'history','error',error='Превышено время ожидания истории Telegram.')
-            return jsonify(error=error), 504
-        output = (proc.stdout + '\n' + proc.stderr).strip()[-2500:]
-        if proc.returncode:
-            error='Ошибка чтения истории Telegram; проверьте сессию и доступ к теме.' if os.getenv('DATABASE_URL') else (output or 'Ошибка чтения истории')
-            save_history_sync_status(error=error)
-            if os.getenv('DATABASE_URL'): record_status(connect,'history','error',error='Ошибка синхронизации истории Telegram.')
-            return jsonify(error=error), 400
-        save_history_sync_status(success=True, message='Ручная синхронизация завершена.' if os.getenv('DATABASE_URL') else output)
-        if os.getenv('DATABASE_URL'): record_status(connect,'history','ok')
-        auto_write_event.set()
-        return jsonify(message=output, **history_sync_status())
-    except Exception as exc:
-        logger.exception('Telegram history sync failed')
-        save_history_sync_status(error='Ошибка чтения истории')
-        if os.getenv('DATABASE_URL'): record_status(connect,'history','error',error='Ошибка чтения истории Telegram.')
-        return jsonify(error='Не удалось прочитать историю Telegram'),500
+            threading.Thread(target=task,daemon=True,name='manual-history-sync').start()
+        except Exception:
+            history_lock.release()
+            raise
+        return jsonify(accepted=True,message='Синхронизация запущена. Статус обновится автоматически.'),202
+    try:
+        data=perform_history_sync()
+        return jsonify(message=data['message'],**history_sync_status()) if data['ok'] else (jsonify(error=data['message']),400)
     finally:
         history_lock.release()
 
