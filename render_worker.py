@@ -1,5 +1,6 @@
 """Independent always-on worker. Never launched by the web server."""
 import os
+import logging
 import time
 import subprocess
 import sys
@@ -80,8 +81,9 @@ def main():
                 finally:
                     lock.release()
             time.sleep(3)
-        except Exception:
-            # A transient database outage must not permanently kill the worker.
+        except Exception as exc:
+            # Only the exception category: DB URL or API secrets must not reach logs.
+            logging.warning('Worker cycle postponed: %s',type(exc).__name__)
             time.sleep(10)
 
 if __name__=='__main__': main()

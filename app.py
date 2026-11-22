@@ -619,18 +619,22 @@ def sync_history():
         except subprocess.TimeoutExpired:
             error='Превышено время ожидания (4 минуты). Проверь подключение Telegram.'
             save_history_sync_status(error=error)
+            if os.getenv('DATABASE_URL'): record_status(connect,'history','error',error='Превышено время ожидания истории Telegram.')
             return jsonify(error=error), 504
         output = (proc.stdout + '\n' + proc.stderr).strip()[-2500:]
         if proc.returncode:
             error='Ошибка чтения истории Telegram; проверьте сессию и доступ к теме.' if os.getenv('DATABASE_URL') else (output or 'Ошибка чтения истории')
             save_history_sync_status(error=error)
+            if os.getenv('DATABASE_URL'): record_status(connect,'history','error',error='Ошибка синхронизации истории Telegram.')
             return jsonify(error=error), 400
-        save_history_sync_status(success=True, message=output)
+        save_history_sync_status(success=True, message='Ручная синхронизация завершена.' if os.getenv('DATABASE_URL') else output)
+        if os.getenv('DATABASE_URL'): record_status(connect,'history','ok')
         auto_write_event.set()
         return jsonify(message=output, **history_sync_status())
     except Exception as exc:
         logger.exception('Telegram history sync failed')
         save_history_sync_status(error='Ошибка чтения истории')
+        if os.getenv('DATABASE_URL'): record_status(connect,'history','error',error='Ошибка чтения истории Telegram.')
         return jsonify(error='Не удалось прочитать историю Telegram'),500
     finally:
         history_lock.release()
@@ -1195,7 +1199,7 @@ def execute_write(pc,vc,first,mode='average',only_messages=None,period=None,expe
         auto_state['last_updated_parts']=result['updated_parts']
         auto_state['last_updated_cells']=result['updated_cells']
         if os.getenv('DATABASE_URL'):
-            try: record_status(connect,'google','ok',details=dict(auto_state))
+            try: record_status(connect,'google','ok',details={**auto_state,'last_error':None})
             except Exception: logger.warning('Could not persist Google status')
         return result
     except Exception as exc:
