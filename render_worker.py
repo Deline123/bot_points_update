@@ -1,9 +1,10 @@
-"""Independent always-on worker. Never launched by the web server."""
+"""Shared runtime loop for standalone or embedded Gunicorn worker."""
 import os
 import logging
 import time
 import subprocess
 import sys
+import threading
 from app import (connect, init_db, poll_once, state, history_lock, auto_settings, execute_write,
                  get_default_sheet_url, parse_sheet_link, save_history_sync_status, ROOT, CHAT_ID, THREAD_ID, TOKEN)
 from runtime_control import record_status, read_status, SharedLock
@@ -34,8 +35,16 @@ def history_once():
     finally:
         history_lock.release()
 
-def cycle(last_history,last_write,now):
-    safe_record('worker','ok')
+def cycle(last_history,last_write,now, *, embedded=False, stop=None):
+    stop=stop or threading.Event()
+    safe_record('worker','ok',details={'mode':'embedded' if embedded else 'external'})
+    if stop.is_set(): return last_history,last_write
+    # Check persisted history before each run: overlapping web processes share one schedule.
+    last_history=max(last_history,read_status(connect,'history').get('at',0))
+    if os.getenv('BOT_POINTS_AUTO_HISTORY_ENABLED','1' if embedded else '0')=='1' and now-last_history>=900:
+        last_history=now
+        history_once()
+    if stop.is_set(): return last_history,last_write
     if history_lock.acquire(blocking=False):
         try:
             poll_once()
@@ -44,11 +53,11 @@ def cycle(last_history,last_write,now):
             safe_record('telegram','error',error=str(exc)[:120] if str(exc).startswith('Telegram HTTP ') else 'Ошибка получения Telegram-сообщений.')
         finally:
             history_lock.release()
-    if os.getenv('BOT_POINTS_AUTO_HISTORY_ENABLED')=='1' and now-last_history>=900:
-        last_history=now
-        history_once()
+    if stop.is_set(): return last_history,last_write
+    last_write=max(last_write,read_status(connect,'google_cycle').get('at',0))
     if now-last_write>=60:
         last_write=now
+        safe_record('google_cycle','ok')
         cfg=auto_settings()
         if (os.getenv('BOT_POINTS_WRITES_ENABLED')=='1' and os.getenv('BOT_POINTS_CLOUD_WRITES_CONFIRMED')=='1'
                 and cfg.get('enabled')):
@@ -60,8 +69,28 @@ def cycle(last_history,last_write,now):
                 safe_record('google','error',error='Автозапись остановлена или отложена; проверьте таблицу и настройки.')
         else:
             safe_record('google','disabled')
-    safe_record('worker','ok')
+    safe_record('worker','ok',details={'mode':'embedded' if embedded else 'external'})
     return last_history,last_write
+
+def run_loop(stop=None, *, embedded=False):
+    """Run only while the owning process lives. No paid service or keep-alive."""
+    stop=stop or threading.Event()
+    lock=SharedLock(connect,741004)
+    last_history=last_write=0
+    while not stop.is_set():
+        try:
+            if lock.acquire(blocking=False):
+                try:
+                    if not TOKEN or not CHAT_ID.lstrip('-').isdigit() or not THREAD_ID.isdigit():
+                        safe_record('worker','not_configured',error='Настройте BOT_TOKEN, CHAT_ID и THREAD_ID.',details={'mode':'embedded' if embedded else 'external'})
+                    else:
+                        last_history,last_write=cycle(last_history,last_write,int(time.time()),embedded=embedded,stop=stop)
+                finally:
+                    lock.release()
+            stop.wait(5)
+        except Exception as exc:
+            logging.warning('Worker cycle postponed: %s',type(exc).__name__)
+            stop.wait(10)
 
 def main():
     if not os.getenv('DATABASE_URL') or os.getenv('BOT_POINTS_WORKER_ENABLED')!='1':
@@ -69,21 +98,6 @@ def main():
     if not TOKEN or not CHAT_ID.lstrip('-').isdigit() or not THREAD_ID.isdigit():
         raise RuntimeError('BOT_TOKEN, CHAT_ID and THREAD_ID required')
     init_db()
-    lock=SharedLock(connect,741004)
-    history=read_status(connect,'history')
-    last_history=history.get('at',0)
-    last_write=0
-    while True:
-        try:
-            if lock.acquire(blocking=False):
-                try:
-                    last_history,last_write=cycle(last_history,last_write,int(time.time()))
-                finally:
-                    lock.release()
-            time.sleep(3)
-        except Exception as exc:
-            # Only the exception category: DB URL or API secrets must not reach logs.
-            logging.warning('Worker cycle postponed: %s',type(exc).__name__)
-            time.sleep(10)
+    run_loop()
 
 if __name__=='__main__': main()

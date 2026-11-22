@@ -1,4 +1,4 @@
-"""Gunicorn entrypoint. No polling or spreadsheet writing in web workers."""
+"""Web initialization; Gunicorn lifecycle hook starts optional embedded runtime."""
 import os
 if not os.getenv('DATABASE_URL'):
     raise RuntimeError('DATABASE_URL is required')
